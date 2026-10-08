@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "never-leaves"
+version = "0.1.0"
+description = "Draft real documents offline, from your own notes, on a local open-weight model, with a no-network guarantee the kernel enforces."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Edward Wade at Empire Labs Pty Ltd" }]
+keywords = ["offline", "local", "llama.cpp", "gguf", "privacy", "trades", "documents"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Office/Business",
+]
+dependencies = ["llama-cpp-python>=0.3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/narko4u/never-leaves"
+
+[project.scripts]
+never-leaves = "never_leaves.cli:main"
+
+[tool.setuptools]
+packages = ["never_leaves"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
