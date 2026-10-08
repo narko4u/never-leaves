@@ -18,15 +18,46 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 OLLAMA_ROOT = Path.home() / ".ollama" / "models"
+SYSTEM_OLLAMA_ROOT = Path("/usr/share/ollama/.ollama/models")
 OLLAMA_MANIFESTS = OLLAMA_ROOT / "manifests"
 OLLAMA_BLOBS = OLLAMA_ROOT / "blobs"
-DEFAULT_OLLAMA_MODEL = "qwen3:4b-instruct"
+DEFAULT_OLLAMA_MODEL = "gemma3:4b"
+# The same model as a loose GGUF file. A file on disk is the form whose
+# loadability we can actually verify, so it is tried first.
+DEFAULT_MODEL_STEM = "gemma-3-4b-it"
 
 SEARCH_DIRS = (
     Path.home() / ".cache" / "never-leaves" / "models",
     Path.home() / "models",
     Path.cwd() / "models",
 )
+
+
+def ollama_roots() -> list:
+    """Every place ollama might keep weights, most specific first.
+
+    A per user install keeps them under the home directory. The system
+    service, which is what the official installer sets up on Linux, keeps
+    them under /usr/share/ollama where any user can read them. Reading
+    only the home directory finds nothing at all on such a machine, and
+    finding nothing is worse than being slow: the search moves on and
+    takes whatever it finds next.
+    """
+    candidates = []
+    override = os.environ.get("OLLAMA_MODELS")
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.append(OLLAMA_ROOT)
+    candidates.append(SYSTEM_OLLAMA_ROOT)
+    candidates.append(Path("/var/lib/ollama/models"))
+    roots = []
+    seen = set()
+    for path in candidates:
+        key = str(path)
+        if key not in seen and path.is_dir():
+            seen.add(key)
+            roots.append(path)
+    return roots
 
 
 class NoModelFound(RuntimeError):
@@ -39,6 +70,7 @@ class ModelRef:
     path: Path
     origin: str
     size_bytes: int
+    notice: str = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -55,13 +87,29 @@ class ModelRef:
 
 
 def _manifest_files() -> list:
-    if not OLLAMA_MANIFESTS.exists():
-        return []
-    return sorted(OLLAMA_MANIFESTS.rglob("*"))
+    """Every manifest file, across every root ollama might be using."""
+    found = []
+    for root in ollama_roots():
+        manifests = root / "manifests"
+        if manifests.is_dir():
+            found.extend(path for path in manifests.rglob("*") if path.is_file())
+    return sorted(found)
+
+
+def _blobs_dir(manifest: Path) -> Path:
+    """The blob store belonging to the root this manifest came from.
+
+    Two roots can hold weights at once and a blob digest only means
+    anything inside its own store, so the manifest decides where to look.
+    """
+    for parent in manifest.parents:
+        if parent.name == "manifests":
+            return parent.parent / "blobs"
+    return OLLAMA_BLOBS
 
 
 def resolve_ollama(name: str) -> ModelRef:
-    """Turn an ollama model name such as qwen3:4b-instruct into its blob.
+    """Turn an ollama model name such as gemma3:4b into its blob.
 
     ollama keeps a manifest per model and the manifest names the weight
     layer. Reading the manifest, rather than guessing at filenames, is how
@@ -96,7 +144,7 @@ def _blob_from_manifest(manifest: Path, name: str) -> ModelRef:
         return None
     for layer in data.get("layers", []):
         if layer.get("mediaType") == "application/vnd.ollama.image.model":
-            blob = OLLAMA_BLOBS / layer["digest"].replace(":", "-")
+            blob = _blobs_dir(manifest) / layer["digest"].replace(":", "-")
             if blob.exists():
                 return ModelRef(
                     name=name,
@@ -124,6 +172,14 @@ def discover(preferred: str = None) -> ModelRef:
             return ModelRef(path.stem, path, "file", path.stat().st_size)
         return resolve_ollama(explicit)
 
+    # The default model, as a loose GGUF, is tried before the ollama tag.
+    # ollama's own Gemma 3 export omits a hyperparameter that this loader
+    # requires, so resolving the tag can hand back a file that will not
+    # load at all.
+    for path in find_ggufs():
+        if path.stem.startswith(DEFAULT_MODEL_STEM):
+            return ModelRef(path.stem, path, "file", path.stat().st_size)
+
     try:
         return resolve_ollama(DEFAULT_OLLAMA_MODEL)
     except NoModelFound:
@@ -132,16 +188,35 @@ def discover(preferred: str = None) -> ModelRef:
     ggufs = find_ggufs()
     if ggufs:
         path = ggufs[0]
-        return ModelRef(path.stem, path, "file", path.stat().st_size)
+        return ModelRef(
+            path.stem,
+            path,
+            "file",
+            path.stat().st_size,
+            notice="%s is not installed. Using the .gguf at %s instead."
+            % (DEFAULT_OLLAMA_MODEL, path),
+        )
 
+    # Last resort: anything ollama happens to have. This is a
+    # substitution, so it is announced rather than quietly swapped in.
+    available = []
     for manifest in _manifest_files():
-        ref = _blob_from_manifest(manifest, manifest.name)
+        label = "%s:%s" % (manifest.parent.name, manifest.name)
+        ref = _blob_from_manifest(manifest, label)
         if ref:
-            return ref
+            available.append(ref)
+    if available:
+        available.sort(key=lambda ref: ref.name)
+        ref = available[0]
+        ref.notice = (
+            "%s is not installed. Using %s from a local ollama store instead."
+            % (DEFAULT_OLLAMA_MODEL, ref.name)
+        )
+        return ref
 
     raise NoModelFound(
         "no local weights found. Point NEVER_LEAVES_MODEL at a .gguf file, "
-        "pass --model or pull a model with ollama."
+        "pass --model, or pull a model with ollama."
     )
 
 
@@ -181,6 +256,35 @@ def load(ref: ModelRef, n_ctx: int = 4096, n_threads: int = None):
         n_batch=256,
         verbose=False,
     )
+
+
+def load_hint(ref: ModelRef, exc: Exception) -> str:
+    """Turn a loader failure into something the operator can act on.
+
+    A traceback out of a C library tells a tradesperson nothing. The one
+    failure worth naming is the ollama Gemma 3 export, because it looks
+    like a working install and is not one.
+    """
+    detail = str(exc)
+    lines = [
+        "could not load %s" % ref.path,
+        "  the loader said: %s" % detail,
+    ]
+    looks_like_gemma3 = "gemma3" in detail or "gemma3" in ref.name
+    if ref.origin == "ollama" and looks_like_gemma3:
+        lines += [
+            "",
+            "  This is a known incompatibility, not a fault in your setup.",
+            "  ollama's Gemma 3 export omits gemma3.attention.layer_norm_rms_epsilon,",
+            "  which this loader treats as required. A GGUF converted by the llama.cpp",
+            "  toolchain carries the key and loads. Use one of these instead:",
+            "",
+            "    curl -L -o ~/models/gemma-3-4b-it-Q4_K_M.gguf \\",
+            "      https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
+            "",
+            "  Or pass any other model: never-leaves quote notes.txt --model /path/to.gguf",
+        ]
+    return "\n".join(lines)
 
 
 def generate(llm, system: str, user: str, max_tokens: int = 700,

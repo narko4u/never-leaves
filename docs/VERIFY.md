@@ -75,14 +75,16 @@ asserts that both are reported.
 To see it on a live run, the demo in the README is reproducible:
 
 ```bash
-never-leaves quote examples/price-pressure-note.txt --client Jenna
+never-leaves quote examples/site-visit-note.txt --client Jenna
 ```
 
-The notes mention an access gap of `400mm`. A 4B model reliably mangles that
-sentence and inserts a figure that is not there. The tool reports it under
-`FIGURE TO CHECK`. Different models mangle it differently, so your run may flag a
-different number or none at all. That variability is the point: the check is what
-makes it safe to use a model this small.
+Every figure in the output is looked up in the notes before you see it. Gemma 3 4B
+kept the figures straight on both runs recorded in the README, so the list came
+back with placeholders to fill in and no unsourced figure. A smaller or differently
+quantised model can insert a figure that is not there. Then it appears under
+`FIGURE TO CHECK`, money first. Behaviour varies by model and by run, so do not rely
+on a particular number appearing. The check is what makes a model this small safe to
+use at all.
 
 ## 3. That nothing is written anywhere else
 
@@ -107,3 +109,7 @@ Being straight about the edges:
 - The claim check compares figures, which is the failure that costs money. It does
   not compare prose against your notes sentence by sentence, so a wrong sentence
   with no numbers in it can still get through.
+- It catches what the draft adds, not what it leaves out. A figure or a scope item
+  in your notes that never reaches the draft is not reported. That happened on both
+  runs recorded in the README: the 400mm access note and the 90mm cutouts did not
+  make the quote. A guard for omission is the next thing this needs.

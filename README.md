@@ -31,7 +31,11 @@ concrete.
 
 ```bash
 pip install -e .
-ollama pull qwen3:4b-instruct      # or point NEVER_LEAVES_MODEL at any .gguf
+
+# Gemma 3 4B as a GGUF file on disk. Any other GGUF works the same way.
+mkdir -p ~/models
+curl -L -o ~/models/gemma-3-4b-it-Q4_K_M.gguf \
+  https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf
 
 never-leaves check                                  # prove the isolation, then exit
 never-leaves quote examples/site-visit-note.txt     # draft a quote from your notes
@@ -45,31 +49,56 @@ still have to check.
 
 ## What it actually produced
 
-Real run, real note, no staging. The notes said this about access under a house:
+Real run, real note, no staging. Gemma 3 4B, 2.5 GB as one Q4_K_M file. The note
+was a scribbled site visit:
 
 ```
-- access under the house is tight, about 400mm
+- replace 6 downlights in kitchen ceiling, existing 90mm cutouts
+- customer wants warm white, not cool white
+- also wants a price to add 3 double GPOs in the shed
+- shed has no existing circuit at all, would need to run cable back to the board, approx 18m
+- access under the house is tight, about 400mm, will slow the cable run down
 ```
 
-The 4B model drafted this:
+It drafted a 143 word quote. The scope and the price table, verbatim:
 
 ```
 ## Scope of work
-Access under house is about 40 short 400mm.
+Replace six downlights in kitchen ceiling. Install two new warm white downlights.
+Add three double GPOs in the shed. Run cable from switchboard to shed.
+
+## Price
+| Item | Rate | Total |
+|---|---|---|
+| Downlights (6) | [RATE] | [TOTAL] |
+| Downlights (2 - Warm White) | [RATE] | [TOTAL] |
+| GPOs (3) | [RATE] | [TOTAL] |
+| Cable Run (18m) | [RATE] | [TOTAL] |
+| Labour | [RATE] | [TOTAL] |
 ```
 
-It invented a `40` and mangled the sentence. The tool caught it before it could
-reach a client:
+Every figure there traces back to the notes: 6, 2, 3 and 18m. Nothing was
+invented and no rate was guessed. The tool listed what a human still has to fill
+in. That was the whole list:
 
 ```
 BEFORE YOU SEND IT
- - FIGURE TO CHECK. These appear in the draft and not in your notes: 40
- - FILL THESE IN. [DEPOSIT], [EXCLUSIONS], [RATE], [TIMEFRAME], [TOTAL]
+ - FILL THESE IN. [AMOUNT], [DEPOSIT], [EXCLUSIONS], [NUMBER], [RATE], [TIMEFRAME], [TOTAL]
 ```
 
-That is the honest picture of a small local model. It is fast, private and free
-and it will occasionally state a number it made up. So the draft is checked, not
-trusted.
+On a second run the customer had asked for a ballpark figure that day. The tool
+still produced `[RATE]` and `[TOTAL]` and no number at all. It does not price
+work, on any run, however the notes are worded.
+
+**And what it got wrong.** The access note, tight at about 400mm, never reached
+the quote. Neither did the 90mm cutouts. The check cannot see that, because the
+opposite fault is the one it was built for: a figure in the draft that is not in
+your notes. A figure in your notes that never reaches the draft is a real failure
+mode of a small model. It showed up twice here. There is no automated guard
+against it yet. Read the draft. That is why it is stamped as one.
+
+So the honest picture: a 4B model that stays faithful to the figures and drops
+things, checked by a tool that catches what it adds and not yet what it omits.
 
 ## How the no-network claim is enforced
 
@@ -122,7 +151,7 @@ never_leaves/
   document.py    renders the draft, the flags and the run record
   ledger.py      local one-line-per-run record
   cli.py         the command
-tests/           34 tests, including two that assert isolation from inside it
+tests/           41 tests, including two that assert isolation from inside it
 examples/        the notes used in the demo above
 docs/VERIFY.md   how to check the claims in this README
 ```
@@ -132,7 +161,15 @@ docs/VERIFY.md   how to check the claims in this README
 - Linux with user namespaces enabled (any current distribution)
 - Python 3.10 or newer
 - `llama-cpp-python`, which is free and installs from a wheel
-- Any GGUF model. The default is `qwen3:4b-instruct` if you already have ollama
+- Any GGUF model. The default is Gemma 3 4B, looked for as a `.gguf` file in
+  `~/.cache/never-leaves/models`, `~/models` and `./models` first, then as the
+  ollama tag `gemma3:4b`
+- Ollama weights are found wherever ollama actually keeps them: `$OLLAMA_MODELS`,
+  `~/.ollama/models` and, on a system install, `/usr/share/ollama/.ollama/models`
+- ollama's own Gemma 3 export does not load on this loader. It omits
+  `gemma3.attention.layer_norm_rms_epsilon`, which the loader requires, so the
+  same model as a GGUF converted by the llama.cpp toolchain is preferred. The
+  tool says so plainly instead of printing a traceback if it is handed one
 
 There is no service, no account, no API key and no bill.
 

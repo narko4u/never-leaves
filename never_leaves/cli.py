@@ -105,9 +105,16 @@ def _facts(args) -> dict:
 def _draft(args, doc_type, note: str, facts: dict):
     ref = model.discover(args.model)
     print("  model               %s" % ref.describe())
+    if ref.notice:
+        print(WARN)
+        print(" NOTE: %s" % ref.notice)
+        print(WARN)
     print(BANNER)
     print("  loading weights into this process...")
-    llm = model.load(ref, n_threads=args.threads)
+    try:
+        llm = model.load(ref, n_threads=args.threads)
+    except Exception as exc:  # noqa: BLE001 - the loader's failure mode is its own
+        _die(model.load_hint(ref, exc))
     print("  drafting...")
     result = model.generate(
         llm,
@@ -191,11 +198,18 @@ def main(argv=None) -> int:
         return 0 if report.isolated else 1
 
     if args.command == "models":
-        report = isolation.inspect()
-        print(_proof_block(report))
+        # No isolation banner here: this command never drafts anything, so it
+        # makes no privacy claim. Inspecting the network would report "NO"
+        # and read as a failure of the tool rather than what it is, which is
+        # a listing that does not need a namespace.
+        print(BANNER)
+        print(" NEVER LEAVES - local weights")
+        print(BANNER)
         try:
             ref = model.discover(args.model)
             print("  selected            %s" % ref.describe())
+            if ref.notice:
+                print("  note                %s" % ref.notice)
         except model.NoModelFound as exc:
             print("  selected            none: %s" % exc)
         found = model.find_ggufs()
