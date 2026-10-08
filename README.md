@@ -1,5 +1,7 @@
 # Never Leaves
 
+[![CI](https://github.com/narko4u/never-leaves/actions/workflows/ci.yml/badge.svg)](https://github.com/narko4u/never-leaves/actions/workflows/ci.yml)
+
 Draft real documents offline, from your own notes, on a local open-weight model.
 
 Two guarantees, both enforced rather than advertised:
