@@ -4,6 +4,9 @@ The important one is the last: it launches a real subprocess inside a
 real network namespace and asserts, from the inside, that egress is
 impossible. If that test ever goes green on a machine that can reach the
 internet, the guarantee is a lie.
+
+That test needs the kernel to permit an unprivileged user namespace. Where
+it does not, the test skips and says why. A skip is not a pass.
 """
 
 import json
@@ -14,6 +17,29 @@ import sys
 import pytest
 
 from never_leaves import isolation
+
+
+def _namespace_capability() -> tuple:
+    """Ask the kernel, not the filesystem, whether a namespace is possible.
+
+    Having the unshare binary is not the question. Some kernels refuse to
+    write /proc/self/uid_map, which is Ubuntu's default from 24.04 onward,
+    and a machine that refuses it cannot evaluate the guarantee at all. The
+    reason travels with the answer so a skip explains itself.
+    """
+    if shutil.which("unshare") is None:
+        return False, "unshare was not found on this machine"
+    probe = subprocess.run(
+        ["unshare", "-rn", "--", "true"], capture_output=True, text=True
+    )
+    if probe.returncode != 0:
+        first = (probe.stderr or "").strip().splitlines()
+        detail = f": {first[0]}" if first else ""
+        return False, f"the kernel refused an unprivileged user namespace{detail}"
+    return True, "ok"
+
+
+_NAMESPACES, _NAMESPACE_REASON = _namespace_capability()
 
 
 def test_interfaces_parse_includes_loopback():
@@ -45,7 +71,7 @@ def test_summary_is_honest_about_each_state():
         assert report.summary().startswith("NOT ISOLATED")
 
 
-@pytest.mark.skipif(shutil.which("unshare") is None, reason="unshare not available")
+@pytest.mark.skipif(not _NAMESPACES, reason=_NAMESPACE_REASON)
 def test_inside_a_namespace_egress_is_impossible(tmp_path):
     """The real guarantee, asserted from inside the box."""
     probe = (
@@ -68,7 +94,7 @@ def test_inside_a_namespace_egress_is_impossible(tmp_path):
     assert report["inet_sockets"] == 0
 
 
-@pytest.mark.skipif(shutil.which("unshare") is None, reason="unshare not available")
+@pytest.mark.skipif(not _NAMESPACES, reason=_NAMESPACE_REASON)
 def test_no_route_means_no_route(tmp_path):
     """No route table entry and no IP socket means a connect must fail."""
     probe = (

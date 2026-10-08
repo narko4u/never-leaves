@@ -45,24 +45,29 @@ jobs:
       - name: Confirm the console script was installed
         run: never-leaves --help
 
+      # Ubuntu 24.04 restricts unprivileged user namespaces by default and the
+      # hosted runners use it. That is exactly the mechanism this project
+      # depends on, so lift the restriction where the kernel exposes the knob
+      # and the two isolation tests run for real instead of skipping.
+      - name: Try to permit unprivileged user namespaces
+        run: |
+          set -x
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          else
+            echo "this kernel exposes no apparmor userns knob"
+          fi
+          if unshare -rn -- true 2>/dev/null; then
+            echo "RESULT: unprivileged user namespaces are available"
+          else
+            echo "RESULT: not available, the isolation tests will report a skip"
+          fi
+
       - name: Collect the suite
         run: python -m pytest --collect-only -q
 
       - name: Run the test suite
         run: python -m pytest -q
-
-      # Two tests assert the no-network guarantee from inside a namespace.
-      # They skip themselves when unshare is missing. The runner must also
-      # permit unprivileged user namespaces for them to run at all. This step
-      # makes that visible instead of silently skipping.
-      - name: Report isolation capability
-        run: |
-          if unshare -rn -- true 2>/dev/null; then
-            echo "unprivileged user namespaces: available"
-          else
-            echo "unprivileged user namespaces: NOT available on this runner"
-            echo "the two isolation tests will be skipped or fail here"
-          fi
 
   secrets:
     name: secret scan (gitleaks)
