@@ -16,50 +16,79 @@ from pathlib import Path
 TESTS = Path(__file__).parent
 
 
-def _names(tree):
-    """Which local names refer to pytest, its skip, skipif and mark."""
-    pytest_names = {"pytest"}
-    skip_names, skipif_names, mark_names = set(), set(), set()
+def _names(tree) -> dict:
+    """Which local names refer to pytest, its skip, skipif and mark.
+
+    Imports are not the only way a name arrives. `from pytest import *`
+    binds the helpers directly, and `f = pytest.skip` binds them by
+    assignment, so both are followed.
+    """
+    names = {"pytest": {"pytest"}, "skip": set(), "skipif": set(), "mark": set()}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "pytest":
-                    pytest_names.add(alias.asname or "pytest")
+                    names["pytest"].add(alias.asname or "pytest")
         elif isinstance(node, ast.ImportFrom) and not node.level:
             module = node.module or ""
             for alias in node.names:
+                if alias.name == "*":
+                    if module == "pytest":
+                        names["skip"].add("skip")
+                        names["skipif"].add("skipif")
+                        names["mark"].add("mark")
+                    elif module == "pytest.mark":
+                        names["skipif"].add("skipif")
+                    continue
                 local = alias.asname or alias.name
                 if module == "pytest" and alias.name == "skip":
-                    skip_names.add(local)
+                    names["skip"].add(local)
                 elif module == "pytest" and alias.name == "mark":
-                    mark_names.add(local)
+                    names["mark"].add(local)
                 elif module == "pytest.mark" and alias.name == "skipif":
-                    skipif_names.add(local)
-    return pytest_names, skip_names, skipif_names, mark_names
+                    names["skipif"].add(local)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        kind = _expr_kind(value, names)
+        if kind is None:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                names[kind].add(target.id)
+    return names
+
+
+def _expr_kind(node, names):
+    """What a name or attribute expression refers to, if it is a skip."""
+    if isinstance(node, ast.Name):
+        if node.id in names["skip"]:
+            return "skip"
+        if node.id in names["skipif"]:
+            return "skipif"
+        return None
+    if not isinstance(node, ast.Attribute):
+        return None
+    base = node.value
+    if node.attr == "skip" and isinstance(base, ast.Name) and base.id in names["pytest"]:
+        return "skip"
+    if node.attr == "skipif":
+        if isinstance(base, ast.Attribute) and base.attr == "mark":
+            owner = base.value
+            if isinstance(owner, ast.Name):
+                if owner.id in names["pytest"] or owner.id in names["mark"]:
+                    return "skipif"
+        if isinstance(base, ast.Name) and base.id in names["mark"]:
+            return "skipif"
+    return None
 
 
 def _kind(node: ast.Call, names):
-    pytest_names, skip_names, skipif_names, mark_names = names
-    func = node.func
-    if isinstance(func, ast.Name):
-        if func.id in skip_names:
-            return "skip"
-        if func.id in skipif_names:
-            return "skipif"
-        return None
-    if not isinstance(func, ast.Attribute):
-        return None
-    base = func.value
-    if func.attr == "skip" and isinstance(base, ast.Name) and base.id in pytest_names:
-        return "skip"
-    if func.attr == "skipif":
-        if isinstance(base, ast.Attribute) and base.attr == "mark":
-            owner = base.value
-            if isinstance(owner, ast.Name) and (owner.id in pytest_names or owner.id in mark_names):
-                return "skipif"
-        if isinstance(base, ast.Name) and base.id in mark_names:
-            return "skipif"
-    return None
+    return _expr_kind(node.func, names)
 
 
 def _states_reason(node: ast.Call) -> bool:
@@ -138,6 +167,14 @@ def test_the_scanner_catches_an_imported_skipif():
 
 def test_a_starred_argument_is_not_a_reason():
     assert violations("import pytest\n\ndef test_x(*args):\n    pytest.skip(*args)\n")
+
+
+def test_the_scanner_catches_a_wildcard_import():
+    assert violations("from pytest import *\n\ndef test_x():\n    skip()\n")
+
+
+def test_the_scanner_catches_an_assigned_alias():
+    assert violations("import pytest\n\nf = pytest.skip\n\ndef test_x():\n    f()\n")
 
 
 def test_the_scanner_accepts_a_reason():
