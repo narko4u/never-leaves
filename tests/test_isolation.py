@@ -113,3 +113,33 @@ def test_no_route_means_no_route(tmp_path):
     )
     assert "BLOCKED" in result.stdout
     assert "REACHABLE" not in result.stdout
+
+
+def test_unreadable_table_is_not_a_proof(monkeypatch, tmp_path):
+    """A table we cannot read must not read as a table with nothing in it."""
+    net = tmp_path / "net"
+    monkeypatch.setattr(isolation, "_PROC", net)
+    monkeypatch.setattr(isolation, "_DEV", net / "dev")
+    monkeypatch.setattr(isolation, "_ROUTE", net / "route")
+
+    report = isolation.inspect()
+
+    assert report.isolated is False
+    assert str(net / "dev") in report.detail
+    assert report.unreadable
+    assert report.summary().startswith("UNPROVEN")
+
+
+def test_only_the_missing_table_is_named(monkeypatch, tmp_path):
+    """A readable table is evidence. Only the unreadable one is reported."""
+    net = tmp_path / "net"
+    net.mkdir()
+    (net / "dev").write_text("h1\nh2\n  lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n")
+    monkeypatch.setattr(isolation, "_PROC", net)
+    monkeypatch.setattr(isolation, "_DEV", net / "dev")
+    monkeypatch.setattr(isolation, "_ROUTE", net / "route")
+
+    report = isolation.inspect()
+
+    assert str(net / "route") in report.unreadable
+    assert str(net / "dev") not in report.detail

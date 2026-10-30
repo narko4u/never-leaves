@@ -17,7 +17,7 @@ import json
 import os
 import shutil
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,6 +43,7 @@ class IsolationReport:
     kernel_namespace: bool
     checked_at: str
     detail: str
+    unreadable: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -51,6 +52,8 @@ class IsolationReport:
         return json.dumps(self.to_dict(), indent=2)
 
     def summary(self) -> str:
+        if self.unreadable:
+            return "UNPROVEN. Could not read %s." % ", ".join(self.unreadable)
         if self.isolated:
             return (
                 "ISOLATED. %d network interface(s) present, none up. "
@@ -65,6 +68,27 @@ def _rows(path: Path) -> list:
         return [ln for ln in path.read_text().splitlines()[1:] if ln.strip()]
     except OSError:
         return []
+
+
+def _kernel_tables() -> tuple:
+    """Every kernel file a proof of isolation is drawn from."""
+    return (_DEV, _ROUTE) + tuple(_PROC / proto for proto in _INET)
+
+
+def unreadable_tables() -> list:
+    """Tables we could not read.
+
+    An unreadable table is not an empty one. Reading nothing must never be
+    mistaken for observing that nothing exists, so these names travel with
+    the report and keep it from claiming a proof it does not have.
+    """
+    missing = []
+    for path in _kernel_tables():
+        try:
+            path.read_bytes()
+        except OSError:
+            missing.append(str(path))
+    return missing
 
 
 def read_interfaces() -> list:
@@ -108,6 +132,22 @@ def count_inet_sockets() -> int:
 
 def inspect() -> IsolationReport:
     """Observe, without trusting any marker, whether egress is possible."""
+    missing = unreadable_tables()
+    if missing:
+        return IsolationReport(
+            isolated=False,
+            mechanism="linux network namespace via unshare -rn",
+            interfaces=[],
+            interfaces_up=[],
+            routes=[],
+            inet_sockets=0,
+            default_route=False,
+            kernel_namespace=os.environ.get(MARKER) == "1",
+            checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            detail="could not read %s, so isolation is unproven" % ", ".join(missing),
+            unreadable=missing,
+        )
+
     interfaces = read_interfaces()
     states = read_interface_states()
     up = sorted(n for n, s in states.items() if s == "up")
