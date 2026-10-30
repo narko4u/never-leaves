@@ -17,7 +17,7 @@ import json
 import os
 import shutil
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,6 +43,7 @@ class IsolationReport:
     kernel_namespace: bool
     checked_at: str
     detail: str
+    unreadable: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -51,6 +52,8 @@ class IsolationReport:
         return json.dumps(self.to_dict(), indent=2)
 
     def summary(self) -> str:
+        if self.unreadable:
+            return "UNPROVEN. Could not read %s." % ", ".join(self.unreadable)
         if self.isolated:
             return (
                 "ISOLATED. %d network interface(s) present, none up. "
@@ -60,25 +63,62 @@ class IsolationReport:
         return "NOT ISOLATED. This process can reach a network."
 
 
-def _rows(path: Path) -> list:
-    try:
-        return [ln for ln in path.read_text().splitlines()[1:] if ln.strip()]
-    except OSError:
-        return []
+def _kernel_tables() -> tuple:
+    """Every kernel file a proof of isolation is drawn from."""
+    return (_DEV, _ROUTE) + tuple(_PROC / proto for proto in _INET)
 
 
-def read_interfaces() -> list:
-    """Interface names from /proc/net/dev, skipping the two header lines."""
+def _read_table(path: Path):
+    """One read of one kernel table, or None when it cannot be read."""
     try:
-        lines = _DEV.read_text().splitlines()[2:]
+        return path.read_text()
     except OSError:
-        return []
+        return None
+
+
+def _snapshot() -> tuple:
+    """Read every table exactly once.
+
+    Reading twice is how this check lied the first time: a preflight read
+    passed and the observation read failed, and the failure arrived as an
+    empty table. One read is one truth, and a missing one is named.
+    """
+    texts, missing = {}, []
+    for path in _kernel_tables():
+        text = _read_table(path)
+        if text is None:
+            missing.append(str(path))
+        else:
+            texts[str(path)] = text
+    return texts, missing
+
+
+def unreadable_tables() -> list:
+    """Tables we could not read. An unreadable table is not an empty one."""
+    return _snapshot()[1]
+
+
+def _interface_names(text: str) -> list:
     names = []
-    for line in lines:
+    for line in text.splitlines()[2:]:
         name = line.split(":", 1)[0].strip()
         if name:
             names.append(name)
     return names
+
+
+def _route_names(text: str) -> list:
+    return [ln.split()[0] for ln in text.splitlines()[1:] if ln.strip()]
+
+
+def _socket_rows(text: str) -> int:
+    return len([ln for ln in text.splitlines()[1:] if ln.strip()])
+
+
+def read_interfaces() -> list:
+    """Interface names from /proc/net/dev, skipping the two header lines."""
+    text = _read_table(_DEV)
+    return [] if text is None else _interface_names(text)
 
 
 def read_interface_states() -> dict:
@@ -93,7 +133,8 @@ def read_interface_states() -> dict:
 
 
 def read_routes() -> list:
-    return [ln.split()[0] for ln in _rows(_ROUTE)]
+    text = _read_table(_ROUTE)
+    return [] if text is None else _route_names(text)
 
 
 def count_inet_sockets() -> int:
@@ -103,17 +144,48 @@ def count_inet_sockets() -> int:
     cannot stop a process that inherited an already-open socket from its
     parent. Counting them is how we rule that out.
     """
-    return sum(len(_rows(_PROC / proto)) for proto in _INET)
+    total = 0
+    for proto in _INET:
+        text = _read_table(_PROC / proto)
+        if text is not None:
+            total += _socket_rows(text)
+    return total
+
+
+def _states_for(interfaces: list) -> dict:
+    states = {}
+    for name in interfaces:
+        try:
+            states[name] = (Path("/sys/class/net") / name / "operstate").read_text().strip()
+        except OSError:
+            states[name] = "unknown"
+    return states
 
 
 def inspect() -> IsolationReport:
     """Observe, without trusting any marker, whether egress is possible."""
-    interfaces = read_interfaces()
-    states = read_interface_states()
+    texts, missing = _snapshot()
+    if missing:
+        return IsolationReport(
+            isolated=False,
+            mechanism="linux network namespace via unshare -rn",
+            interfaces=[],
+            interfaces_up=[],
+            routes=[],
+            inet_sockets=0,
+            default_route=False,
+            kernel_namespace=os.environ.get(MARKER) == "1",
+            checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            detail="could not read %s, so isolation is unproven" % ", ".join(missing),
+            unreadable=missing,
+        )
+
+    interfaces = _interface_names(texts[str(_DEV)])
+    states = _states_for(interfaces)
     up = sorted(n for n, s in states.items() if s == "up")
-    routes = read_routes()
+    routes = _route_names(texts[str(_ROUTE)])
     default_route = any(r != "lo" for r in routes)
-    sockets = count_inet_sockets()
+    sockets = sum(_socket_rows(texts[str(_PROC / proto)]) for proto in _INET)
 
     only_loopback = all(n == "lo" for n in interfaces)
     isolated = only_loopback and not up and not routes and sockets == 0
