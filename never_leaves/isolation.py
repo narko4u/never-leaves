@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -226,8 +227,21 @@ class IsolationUnavailable(RuntimeError):
 
 
 def supported() -> tuple:
+    """Can this machine give us a namespace? Ask the kernel, do not assume.
+
+    The binary being installed says nothing about the policy: a kernel with
+    unprivileged user namespaces disabled has `unshare` and still refuses.
+    So the probe is a real one, and its refusal is returned as the reason.
+    """
     if not shutil.which("unshare"):
         return False, "unshare was not found, so this machine cannot give us a namespace"
+    probe = subprocess.run(
+        ["unshare", "-rn", "--", "true"], capture_output=True, text=True
+    )
+    if probe.returncode != 0:
+        lines = (probe.stderr or "").strip().splitlines()
+        detail = ": " + lines[0] if lines else ""
+        return False, "the kernel refused an unprivileged user namespace" + detail
     return True, "ok"
 
 
