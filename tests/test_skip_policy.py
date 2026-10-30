@@ -16,6 +16,21 @@ from pathlib import Path
 TESTS = Path(__file__).parent
 
 
+def _bind(target, value, names):
+    """Bind one assignment target, including tuple unpacking."""
+    if isinstance(target, ast.Name):
+        kind = _ref_kind(value, names)
+        for name in ("pytest", "mark", "skip", "skipif"):
+            names[name].discard(target.id)
+        if kind:
+            names[kind].add(target.id)
+        return
+    if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)):
+        if len(target.elts) == len(value.elts):
+            for element, item in zip(target.elts, value.elts):
+                _bind(element, item, names)
+
+
 def _names(tree) -> dict:
     """Which local names refer to pytest, its skip, skipif and mark.
 
@@ -47,28 +62,19 @@ def _names(tree) -> dict:
                     names["mark"].add(local)
                 elif module == "pytest.mark" and alias.name == "skipif":
                     names["skipif"].add(local)
-    assignments = []
+    events = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
-            targets, value = node.targets, node.value
+            pairs = [(target, node.value) for target in node.targets]
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets, value = [node.target], node.value
+            pairs = [(node.target, node.value)]
         else:
             continue
-        assignments.append((targets, value))
-    # Aliases can be chained (`p = pytest`, then `s = p.skip`), so keep
-    # resolving until a pass changes nothing.
-    changed = True
-    while changed:
-        changed = False
-        for targets, value in assignments:
-            kind = _ref_kind(value, names)
-            if kind is None:
-                continue
-            for target in targets:
-                if isinstance(target, ast.Name) and target.id not in names[kind]:
-                    names[kind].add(target.id)
-                    changed = True
+        events.extend((node.lineno, target, value) for target, value in pairs)
+    # Bindings apply in the order they are written, so a reassignment is
+    # taken at its word: whatever a name was last bound to is what it is.
+    for _, target, value in sorted(events, key=lambda event: event[0]):
+        _bind(target, value, names)
     return names
 
 
@@ -196,6 +202,16 @@ def test_the_scanner_follows_a_mark_alias():
     assert violations(
         "import pytest\n\nm = pytest.mark\n\n@m.skipif(True)\ndef test_x():\n    pass\n"
     )
+
+
+def test_the_scanner_follows_an_unpacked_assignment():
+    assert violations(
+        "import pytest\n\na, b = pytest, pytest.mark\n\n@b.skipif(True)\ndef test_x():\n    pass\n"
+    )
+
+
+def test_a_reassigned_name_is_taken_at_its_word():
+    assert not violations("import pytest\n\nf = pytest.skip\nf = len\n\ndef test_x():\n    f()\n")
 
 
 def test_the_scanner_accepts_a_reason():
