@@ -268,5 +268,13 @@ def ensure_isolated(argv: list, allow_unverified: bool = False) -> IsolationRepo
             return report
         raise IsolationUnavailable(why + ". Re-run with --no-isolate to accept that risk.")
 
-    re_exec_isolated(argv)
+    try:
+        re_exec_isolated(argv)
+    except OSError as exc:
+        # The binary exists and the kernel still refused. That is a refusal,
+        # not a crash, and the caller must be able to say why.
+        raise IsolationUnavailable(
+            "could not enter a network namespace: %s. Re-run with --no-isolate to accept that risk."
+            % exc
+        ) from exc
     raise AssertionError("unreachable: os.execvpe should not return")

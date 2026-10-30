@@ -202,3 +202,50 @@ def test_failure_during_observation_is_not_a_pass(monkeypatch, tmp_path):
     assert report.isolated is False
     assert "counting-table" in report.detail
     assert dev.reads == 1
+
+
+def _not_isolated():
+    return isolation.IsolationReport(
+        isolated=False,
+        mechanism="test",
+        interfaces=[],
+        interfaces_up=[],
+        routes=[],
+        inet_sockets=0,
+        default_route=False,
+        kernel_namespace=False,
+        checked_at="2026-10-31T00:00:00+00:00",
+        detail="not isolated",
+    )
+
+
+def test_exec_refusal_is_a_refusal_not_a_traceback(monkeypatch):
+    """A kernel that refuses the namespace must reach the caller as a refusal."""
+    monkeypatch.setattr(isolation, "inspect", _not_isolated)
+    monkeypatch.setattr(isolation, "supported", lambda: (True, "ok"))
+
+    def refused(argv):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(isolation, "re_exec_isolated", refused)
+
+    with pytest.raises(isolation.IsolationUnavailable) as caught:
+        isolation.ensure_isolated([])
+
+    assert "could not enter a network namespace" in str(caught.value)
+    assert "Operation not permitted" in str(caught.value)
+
+
+def test_binary_vanishing_between_check_and_exec_is_a_refusal(monkeypatch):
+    monkeypatch.setattr(isolation, "inspect", _not_isolated)
+    monkeypatch.setattr(isolation, "supported", lambda: (True, "ok"))
+
+    def gone(argv):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(isolation, "re_exec_isolated", gone)
+
+    with pytest.raises(isolation.IsolationUnavailable) as caught:
+        isolation.ensure_isolated([])
+
+    assert "could not enter a network namespace" in str(caught.value)
