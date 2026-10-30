@@ -47,6 +47,7 @@ def _names(tree) -> dict:
                     names["mark"].add(local)
                 elif module == "pytest.mark" and alias.name == "skipif":
                     names["skipif"].add(local)
+    assignments = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             targets, value = node.targets, node.value
@@ -54,37 +55,45 @@ def _names(tree) -> dict:
             targets, value = [node.target], node.value
         else:
             continue
-        kind = _expr_kind(value, names)
-        if kind is None:
-            continue
-        for target in targets:
-            if isinstance(target, ast.Name):
-                names[kind].add(target.id)
+        assignments.append((targets, value))
+    # Aliases can be chained (`p = pytest`, then `s = p.skip`), so keep
+    # resolving until a pass changes nothing.
+    changed = True
+    while changed:
+        changed = False
+        for targets, value in assignments:
+            kind = _ref_kind(value, names)
+            if kind is None:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id not in names[kind]:
+                    names[kind].add(target.id)
+                    changed = True
     return names
 
 
-def _expr_kind(node, names):
-    """What a name or attribute expression refers to, if it is a skip."""
+def _ref_kind(node, names):
+    """What a name or attribute expression refers to, if anything."""
     if isinstance(node, ast.Name):
-        if node.id in names["skip"]:
-            return "skip"
-        if node.id in names["skipif"]:
-            return "skipif"
+        for kind in ("pytest", "mark", "skip", "skipif"):
+            if node.id in names[kind]:
+                return kind
         return None
     if not isinstance(node, ast.Attribute):
         return None
     base = node.value
-    if node.attr == "skip" and isinstance(base, ast.Name) and base.id in names["pytest"]:
-        return "skip"
-    if node.attr == "skipif":
-        if isinstance(base, ast.Attribute) and base.attr == "mark":
-            owner = base.value
-            if isinstance(owner, ast.Name):
-                if owner.id in names["pytest"] or owner.id in names["mark"]:
-                    return "skipif"
-        if isinstance(base, ast.Name) and base.id in names["mark"]:
-            return "skipif"
+    if isinstance(base, ast.Name) and base.id in names["pytest"]:
+        if node.attr in ("mark", "skip", "skipif"):
+            return node.attr
+        return None
+    if node.attr == "skipif" and _ref_kind(base, names) == "mark":
+        return "skipif"
     return None
+
+
+def _expr_kind(node, names):
+    kind = _ref_kind(node, names)
+    return kind if kind in ("skip", "skipif") else None
 
 
 def _kind(node: ast.Call, names):
@@ -175,6 +184,18 @@ def test_the_scanner_catches_a_wildcard_import():
 
 def test_the_scanner_catches_an_assigned_alias():
     assert violations("import pytest\n\nf = pytest.skip\n\ndef test_x():\n    f()\n")
+
+
+def test_the_scanner_follows_an_alias_chain():
+    assert violations(
+        "import pytest\n\np = pytest\ns = p.skip\n\ndef test_x():\n    s()\n"
+    )
+
+
+def test_the_scanner_follows_a_mark_alias():
+    assert violations(
+        "import pytest\n\nm = pytest.mark\n\n@m.skipif(True)\ndef test_x():\n    pass\n"
+    )
 
 
 def test_the_scanner_accepts_a_reason():
