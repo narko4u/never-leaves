@@ -235,9 +235,14 @@ def supported() -> tuple:
     """
     if not shutil.which("unshare"):
         return False, "unshare was not found, so this machine cannot give us a namespace"
-    probe = subprocess.run(
-        ["unshare", "-rn", "--", "true"], capture_output=True, text=True
-    )
+    try:
+        probe = subprocess.run(
+            ["unshare", "-rn", "--", "true"], capture_output=True, text=True
+        )
+    except OSError as exc:
+        # The binary can vanish or lose its execute bit between the lookup
+        # and the launch. That is a refusal, not a crash.
+        return False, "unshare could not be run: %s" % exc
     if probe.returncode != 0:
         lines = (probe.stderr or "").strip().splitlines()
         detail = ": " + lines[0] if lines else ""

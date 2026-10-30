@@ -290,3 +290,31 @@ def test_supported_names_a_missing_binary(monkeypatch):
 
     assert ok is False
     assert "unshare was not found" in why
+
+
+def test_supported_survives_a_binary_that_vanishes(monkeypatch):
+    monkeypatch.setattr(isolation.shutil, "which", lambda name: "/usr/bin/unshare")
+
+    def gone(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(isolation.subprocess, "run", gone)
+
+    ok, why = isolation.supported()
+
+    assert ok is False
+    assert "could not be run" in why
+
+
+def test_supported_survives_a_binary_without_execute_permission(monkeypatch):
+    monkeypatch.setattr(isolation.shutil, "which", lambda name: "/usr/bin/unshare")
+
+    def denied(*a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(isolation.subprocess, "run", denied)
+
+    ok, why = isolation.supported()
+
+    assert ok is False
+    assert "Permission denied" in why
