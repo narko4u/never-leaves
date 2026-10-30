@@ -143,3 +143,62 @@ def test_only_the_missing_table_is_named(monkeypatch, tmp_path):
 
     assert str(net / "route") in report.unreadable
     assert str(net / "dev") not in report.detail
+
+
+class _CountingTable:
+    """A kernel table that records how many times it was read."""
+
+    def __init__(self, text=None, error=None):
+        self.text = text
+        self.error = error
+        self.reads = 0
+
+    def read_text(self):
+        self.reads += 1
+        if self.error:
+            raise PermissionError(self.error)
+        return self.text
+
+    def __str__(self):
+        return "counting-table"
+
+
+def _fake_net(tmp_path):
+    net = tmp_path / "net"
+    net.mkdir()
+    for proto in ("tcp", "tcp6", "udp", "udp6"):
+        (net / proto).write_text("sl local remote st\n")
+    return net
+
+
+def test_each_table_is_read_once(monkeypatch, tmp_path):
+    """Two reads are two truths. The check must rest on one."""
+    net = _fake_net(tmp_path)
+    dev = _CountingTable("h1\nh2\n  lo: 0\n")
+    route = _CountingTable("Iface Destination\n")
+    monkeypatch.setattr(isolation, "_PROC", net)
+    monkeypatch.setattr(isolation, "_DEV", dev)
+    monkeypatch.setattr(isolation, "_ROUTE", route)
+    monkeypatch.setattr(isolation, "_states_for", lambda names: {n: "down" for n in names})
+
+    report = isolation.inspect()
+
+    assert report.isolated is True
+    assert dev.reads == 1
+    assert route.reads == 1
+
+
+def test_failure_during_observation_is_not_a_pass(monkeypatch, tmp_path):
+    """The read that fails is the read that counts, and it must not pass."""
+    net = _fake_net(tmp_path)
+    dev = _CountingTable(error="permission denied")
+    route = _CountingTable("Iface Destination\n")
+    monkeypatch.setattr(isolation, "_PROC", net)
+    monkeypatch.setattr(isolation, "_DEV", dev)
+    monkeypatch.setattr(isolation, "_ROUTE", route)
+
+    report = isolation.inspect()
+
+    assert report.isolated is False
+    assert "counting-table" in report.detail
+    assert dev.reads == 1
