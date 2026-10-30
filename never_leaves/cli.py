@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from . import claims, document, isolation, ledger, model, templates
 
@@ -38,7 +39,7 @@ def _proof_block(report: isolation.IsolationReport) -> str:
     return "\n".join(lines)
 
 
-def _die(message: str, code: int = 2):
+def _die(message: str, code: int = 2) -> NoReturn:
     print("error: %s" % message, file=sys.stderr)
     raise SystemExit(code)
 
@@ -191,7 +192,14 @@ def main(argv=None) -> int:
         return _run_document(args, templates.get(args.command))
 
     if args.command == "check":
-        report = isolation.ensure_isolated(sys.argv[1:], allow_unverified=args.no_isolate)
+        try:
+            report = isolation.ensure_isolated(
+                sys.argv[1:], allow_unverified=args.no_isolate
+            )
+        except isolation.IsolationUnavailable as exc:
+            # A check that cannot establish the guarantee is not a check that
+            # passed. Exit 2 and say which tool is missing.
+            _die(str(exc))
         print(_proof_block(report))
         if args.json:
             print(report.to_json())
