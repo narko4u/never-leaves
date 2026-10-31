@@ -118,7 +118,7 @@ A skip is never a pass. `tests/conftest.py` fails any skip that carries no words
 of its own, so a suite that quietly stops testing a guarantee cannot go green,
 and the summary reports that failure rather than a skip.
 
-A skip counted as a pass is a defect in our harness. We fix it and never waive it.
+A skip counted as a pass is a harness defect that we fix and never waive.
 
 The rule covers two moments. A skip raised by a test or a fixture is judged when
 that test runs. A skip raised while a module is being collected never becomes a
