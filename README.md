@@ -158,6 +158,22 @@ examples/        the notes used in the demo above
 docs/VERIFY.md   how to check the claims in this README
 ```
 
+## Testing
+
+The suite runs without a model, without a network and without installing the
+package:
+
+```bash
+uv run --no-project --with pytest python -m pytest -q
+```
+
+That is the same command the board's gate runs, so a green local run and a
+green gate mean the same thing.
+
+A skip must carry its reason, and `tests/test_skip_policy.py` fails the suite
+when one does not. Where the kernel refuses an unprivileged user namespace the
+isolation tests skip with the kernel's own message. A skip is not a pass.
+
 ## Requirements
 
 - Linux with user namespaces enabled (any current distribution)
