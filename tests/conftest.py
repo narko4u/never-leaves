@@ -2,24 +2,39 @@
 
 The scan in tests/test_skip_policy.py reads source, so it catches the forms a
 person writes. This hook catches the rest: a reason built at run time, a name
-reached through a dict, a branch the environment chose. It runs after every
-test phase and turns a reasonless skip into a failure that names the test.
+reached through a dict, a branch the environment chose. It judges authorship,
+not text, because pytest writes fallback text of its own: a bare
+@pytest.mark.skip becomes "unconditional skip", and a skipif given a string
+condition becomes that condition. Neither was written by the author, so neither
+counts as a reason. A reason the author typed, even the same words, does.
 """
 
 import pytest
 
+SKIP_MARKS = ("skip", "skipif")
 
-def _reason(report) -> str:
-    """The words after 'Skipped:' in a report, or an empty string."""
-    longrepr = report.longrepr
-    text = longrepr[2] if isinstance(longrepr, tuple) and len(longrepr) == 3 else longrepr
-    text = str(text or "").strip()
-    if text == "Skipped":
+
+def _mark_states_a_reason(item) -> bool:
+    for mark in item.iter_markers():
+        if mark.name in SKIP_MARKS:
+            reason = mark.kwargs.get("reason")
+            if isinstance(reason, str) and reason.strip():
+                return True
+    return False
+
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        marks = [mark.name for mark in item.iter_markers() if mark.name in SKIP_MARKS]
+        item.pb_skip_mark = bool(marks)
+        item.pb_mark_reason = _mark_states_a_reason(item)
+
+
+def _raised_reason(call) -> str:
+    excinfo = getattr(call, "excinfo", None)
+    if excinfo is None:
         return ""
-    if text.startswith("Skipped:"):
-        text = text[len("Skipped:"):].strip()
-    # pytest fills this in for a bare @pytest.mark.skip; nobody wrote it.
-    return "" if text == "unconditional skip" else text
+    return str(getattr(excinfo.value, "msg", "") or "").strip()
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -28,6 +43,14 @@ def pytest_runtest_makereport(item, call):
     report = outcome.get_result()
     if getattr(report, "wasxfail", None):
         return
-    if report.skipped and not _reason(report):
+    if not report.skipped:
+        return
+
+    if getattr(item, "pb_skip_mark", False) and not getattr(item, "pb_mark_reason", False):
+        reasonless = True
+    else:
+        reasonless = not _raised_reason(call)
+
+    if reasonless:
         report.outcome = "failed"
         report.longrepr = "%s: skipped without a reason" % item.nodeid
