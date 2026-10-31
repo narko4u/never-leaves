@@ -117,6 +117,9 @@ counts and the isolation state. The default location is
 A skip is never a pass. `tests/conftest.py` fails any skip that carries no words
 of its own, so a suite that quietly stops testing a guarantee cannot go green.
 
+A skip that is counted as a pass is a defect in the harness, not a lenient
+result, so it is fixed rather than waived.
+
 The rule covers two moments. A skip raised by a test or a fixture is judged when
 that test runs. A skip raised while a module is being collected never becomes a
 test, so it is judged at collection instead, and the failure names the module
