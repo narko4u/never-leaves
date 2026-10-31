@@ -39,6 +39,10 @@ def _proof_block(report: isolation.IsolationReport) -> str:
     return "\n".join(lines)
 
 
+def _say_not_isolated(report: isolation.IsolationReport) -> None:
+    print("NOT ISOLATED: %s" % report.not_isolated_reason())
+
+
 def _die(message: str, code: int = 2) -> NoReturn:
     print("error: %s" % message, file=sys.stderr)
     raise SystemExit(code)
@@ -130,6 +134,7 @@ def _run_document(args, doc_type):
     report = isolation.ensure_isolated(sys.argv[1:], allow_unverified=args.no_isolate)
     print(_proof_block(report))
     if not report.isolated:
+        _say_not_isolated(report)
         print(WARN)
         print(" WARNING: isolation was not established. This run is NOT private.")
         print(WARN)
@@ -155,7 +160,10 @@ def _run_document(args, doc_type):
     )
     out.write_text(rendered, encoding="utf-8")
 
-    final = isolation.inspect()
+    # Re-observe inside whatever namespace this run holds. A run that never
+    # entered one keeps its unverified status: reading the host's tables again
+    # could come back clean and hand the ledger a pass the run never earned.
+    final = isolation.inspect() if report.kernel_namespace else report.outside_a_namespace()
     record = ledger.build_record(doc_type, run, draft_check, final, args.note)
     record["output_path"] = str(out)
     ledger_path = ledger.append(record, Path(args.ledger) if args.ledger else None)
@@ -180,7 +188,8 @@ def _run_document(args, doc_type):
         print("   - %s" % line)
     print()
     print("  isolation re-checked after drafting: %s"
-          % ("still isolated, still no route" if final.isolated else "PROBLEM, see ledger"))
+          % ("still isolated, still no route" if final.isolated
+             else "NOT ISOLATED: %s" % final.not_isolated_reason()))
     return 0
 
 
@@ -200,6 +209,8 @@ def main(argv=None) -> int:
             # A check that cannot establish the guarantee is not a check that
             # passed. Exit 2 and say which tool is missing.
             _die(str(exc))
+        if not report.isolated:
+            _say_not_isolated(report)
         print(_proof_block(report))
         if args.json:
             print(report.to_json())
