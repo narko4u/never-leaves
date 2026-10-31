@@ -105,3 +105,33 @@ def test_one_session_holds_both_kinds(tmp_path):
     assert result.returncode != 0, printed
     assert "1 failed, 1 skipped" in printed
     assert "test_bad" in printed
+
+
+def test_an_inactive_reasoned_mark_cannot_vouch_for_a_bare_skip(tmp_path):
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\n\n@pytest.mark.skipif(False, reason=\"only on windows\")\n@pytest.mark.skip\ndef test_bad():\n    pass\n",
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "skipped without a reason" in result.stdout + result.stderr
+
+
+def test_an_inactive_reasoned_mark_cannot_vouch_for_a_reasonless_skipif(tmp_path):
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\n\n@pytest.mark.skipif(False, reason=\"only on windows\")\n@pytest.mark.skipif(\"1 == 1\")\ndef test_bad():\n    pass\n",
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "skipped without a reason" in result.stdout + result.stderr
+
+
+def test_the_fired_reasoned_mark_still_counts(tmp_path):
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\n\n@pytest.mark.skipif(False, reason=\"only on windows\")\n@pytest.mark.skipif(\"1 == 1\", reason=\"the kernel has no namespaces\")\ndef test_good():\n    pass\n",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 skipped" in result.stdout
