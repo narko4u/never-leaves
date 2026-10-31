@@ -18,7 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,6 +48,24 @@ class IsolationReport:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    def outside_a_namespace(self) -> "IsolationReport":
+        """The honest report for a run allowed to go on without a namespace.
+
+        A clean table read outside a namespace establishes nothing: the
+        process still holds whatever network the machine gave it. Saying
+        isolated true here would launder the opt-out into a guarantee.
+        """
+        return replace(
+            self,
+            isolated=False,
+            kernel_namespace=False,
+            detail=(
+                "no network namespace was entered, so network access remains "
+                "possible even though the tables read %s"
+                % ("clean" if self.isolated and not self.unreadable else "dirty")
+            ),
+        )
 
     def not_isolated_reason(self) -> str:
         """What the warning has to admit, given what could be read."""
@@ -293,7 +311,7 @@ def ensure_isolated(argv: list, allow_unverified: bool = False) -> IsolationRepo
     ok, why = supported()
     if not ok:
         if allow_unverified:
-            return report
+            return report.outside_a_namespace()
         raise IsolationUnavailable(why + ". Re-run with --no-isolate to accept that risk.")
 
     try:

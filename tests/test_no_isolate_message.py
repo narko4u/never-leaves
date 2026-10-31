@@ -85,3 +85,33 @@ def test_document_commands_say_it_too(monkeypatch, capsys, command):
     out = capsys.readouterr().out
     assert "NOT ISOLATED" in out
     assert "network access remains possible" in out
+
+
+def test_a_clean_reading_without_a_namespace_is_not_a_pass(monkeypatch):
+    """The trap: no unshare, but the tables read clean on this machine."""
+    clean = _report(
+        isolated=True,
+        kernel_namespace=False,
+        interfaces=["lo"],
+        interfaces_up=["lo"],
+        routes=[],
+        inet_sockets=0,
+        detail="Only loopback is present and no route exists.",
+    )
+    monkeypatch.setattr(isolation, "inspect", lambda: clean)
+    monkeypatch.setattr(isolation, "supported", lambda: (False, "unshare is not available"))
+
+    report = isolation.ensure_isolated([], allow_unverified=True)
+
+    assert report.isolated is False
+    assert report.kernel_namespace is False
+    assert "network access remains possible" in report.not_isolated_reason()
+
+
+def test_a_clean_reading_without_a_namespace_still_refuses(monkeypatch):
+    clean = _report(isolated=True, kernel_namespace=False, interfaces=["lo"])
+    monkeypatch.setattr(isolation, "inspect", lambda: clean)
+    monkeypatch.setattr(isolation, "supported", lambda: (False, "unshare is not available"))
+
+    with pytest.raises(isolation.IsolationUnavailable):
+        isolation.ensure_isolated([])
