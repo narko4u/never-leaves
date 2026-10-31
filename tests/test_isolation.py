@@ -249,3 +249,72 @@ def test_binary_vanishing_between_check_and_exec_is_a_refusal(monkeypatch):
         isolation.ensure_isolated([])
 
     assert "could not enter a network namespace" in str(caught.value)
+
+
+class _Probe:
+    def __init__(self, returncode, stderr=""):
+        self.returncode = returncode
+        self.stderr = stderr
+
+
+def test_supported_refuses_a_kernel_that_denies_the_namespace(monkeypatch):
+    """unshare installed but the kernel saying no is not support."""
+    monkeypatch.setattr(isolation.shutil, "which", lambda name: "/usr/bin/unshare")
+    monkeypatch.setattr(
+        isolation.subprocess,
+        "run",
+        lambda *a, **k: _Probe(1, "unshare: unshare failed: Operation not permitted\n"),
+    )
+
+    ok, why = isolation.supported()
+
+    assert ok is False
+    assert "Operation not permitted" in why
+
+
+def test_supported_runs_the_probe_and_accepts_it(monkeypatch):
+    calls = []
+    monkeypatch.setattr(isolation.shutil, "which", lambda name: "/usr/bin/unshare")
+    monkeypatch.setattr(
+        isolation.subprocess, "run", lambda argv, **k: calls.append(argv) or _Probe(0)
+    )
+
+    assert isolation.supported() == (True, "ok")
+    assert calls == [["unshare", "-rn", "--", "true"]]
+
+
+def test_supported_names_a_missing_binary(monkeypatch):
+    monkeypatch.setattr(isolation.shutil, "which", lambda name: None)
+
+    ok, why = isolation.supported()
+
+    assert ok is False
+    assert "unshare was not found" in why
+
+
+def test_supported_survives_a_binary_that_vanishes(monkeypatch):
+    monkeypatch.setattr(isolation.shutil, "which", lambda name: "/usr/bin/unshare")
+
+    def gone(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(isolation.subprocess, "run", gone)
+
+    ok, why = isolation.supported()
+
+    assert ok is False
+    assert "could not be run" in why
+
+
+def test_supported_survives_a_binary_without_execute_permission(monkeypatch):
+    monkeypatch.setattr(isolation.shutil, "which", lambda name: "/usr/bin/unshare")
+
+    def denied(*a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(isolation.subprocess, "run", denied)
+
+    ok, why = isolation.supported()
+
+    assert ok is False
+    assert "Permission denied" in why
