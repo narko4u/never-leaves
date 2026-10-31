@@ -313,4 +313,6 @@ def test_a_strict_xfail_that_passes_fails_the_run(tmp_path):
     output = result.stdout + result.stderr
     assert result.returncode != 0, output
     assert "XPASS(strict)" in output
+    assert "1 failed" in output
+    assert "1 skipped" not in output
     assert "skipped without a reason" not in output
