@@ -4,84 +4,36 @@ A skip that says nothing is indistinguishable from a pass nobody tried. G2
 says a skip carries its reason, and this test is what keeps that true for
 the next skip somebody adds.
 
-The scanner resolves imports rather than matching text, so a skip counts
-however it was brought into the module: `pytest.skip`, `import pytest as
-pt`, or `from pytest import skip`. A starred argument is not accepted as a
-reason, because we cannot see inside it.
+The scan is a small resolver, not a grep. It follows imports, aliases,
+unpacking and reassignment, and it reads a body in the order it will run,
+so a call is judged by what a name meant at that moment, in that scope. A
+starred argument is never accepted as a reason, because we cannot see
+inside it.
 """
 
 import ast
 from pathlib import Path
 
 TESTS = Path(__file__).parent
+KINDS = ("pytest", "mark", "skip", "skipif")
 
 
-def _bind(target, value, names):
-    """Bind one assignment target, including tuple unpacking."""
-    if isinstance(target, ast.Name):
-        kind = _ref_kind(value, names)
-        for name in ("pytest", "mark", "skip", "skipif"):
-            names[name].discard(target.id)
-        if kind:
-            names[kind].add(target.id)
-        return
-    if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)):
-        if len(target.elts) == len(value.elts):
-            for element, item in zip(target.elts, value.elts):
-                _bind(element, item, names)
-
-
-def _names(tree) -> dict:
-    """Which local names refer to pytest, its skip, skipif and mark.
-
-    Imports are not the only way a name arrives. `from pytest import *`
-    binds the helpers directly, and `f = pytest.skip` binds them by
-    assignment, so both are followed.
-    """
-    names = {"pytest": {"pytest"}, "skip": set(), "skipif": set(), "mark": set()}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == "pytest":
-                    names["pytest"].add(alias.asname or "pytest")
-        elif isinstance(node, ast.ImportFrom) and not node.level:
-            module = node.module or ""
-            for alias in node.names:
-                if alias.name == "*":
-                    if module == "pytest":
-                        names["skip"].add("skip")
-                        names["skipif"].add("skipif")
-                        names["mark"].add("mark")
-                    elif module == "pytest.mark":
-                        names["skipif"].add("skipif")
-                    continue
-                local = alias.asname or alias.name
-                if module == "pytest" and alias.name == "skip":
-                    names["skip"].add(local)
-                elif module == "pytest" and alias.name == "mark":
-                    names["mark"].add(local)
-                elif module == "pytest.mark" and alias.name == "skipif":
-                    names["skipif"].add(local)
-    events = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            pairs = [(target, node.value) for target in node.targets]
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            pairs = [(node.target, node.value)]
-        else:
-            continue
-        events.extend((node.lineno, target, value) for target, value in pairs)
-    # Bindings apply in the order they are written, so a reassignment is
-    # taken at its word: whatever a name was last bound to is what it is.
-    for _, target, value in sorted(events, key=lambda event: event[0]):
-        _bind(target, value, names)
+def _fresh(inherited=None) -> dict:
+    names = {"pytest": {"pytest"}, "mark": set(), "skip": set(), "skipif": set()}
+    if inherited:
+        for kind in KINDS:
+            names[kind] |= inherited[kind]
     return names
+
+
+def _copy(names) -> dict:
+    return {kind: set(names[kind]) for kind in KINDS}
 
 
 def _ref_kind(node, names):
     """What a name or attribute expression refers to, if anything."""
     if isinstance(node, ast.Name):
-        for kind in ("pytest", "mark", "skip", "skipif"):
+        for kind in KINDS:
             if node.id in names[kind]:
                 return kind
         return None
@@ -102,8 +54,44 @@ def _expr_kind(node, names):
     return kind if kind in ("skip", "skipif") else None
 
 
-def _kind(node: ast.Call, names):
-    return _expr_kind(node.func, names)
+def _bind_target(target, value, names):
+    """Bind one assignment target, including tuple unpacking."""
+    if isinstance(target, ast.Name):
+        kind = _ref_kind(value, names)
+        for kind_name in KINDS:
+            names[kind_name].discard(target.id)
+        if kind:
+            names[kind].add(target.id)
+        return
+    if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)):
+        if len(target.elts) == len(value.elts):
+            for element, item in zip(target.elts, value.elts):
+                _bind_target(element, item, names)
+
+
+def _bind_import(node, names):
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            if alias.name == "pytest":
+                names["pytest"].add(alias.asname or "pytest")
+        return
+    if node.level:
+        return
+    module = node.module or ""
+    for alias in node.names:
+        if alias.name == "*":
+            if module == "pytest":
+                names["skip"].add("skip")
+                names["skipif"].add("skipif")
+                names["mark"].add("mark")
+            elif module == "pytest.mark":
+                names["skipif"].add("skipif")
+            continue
+        local = alias.asname or alias.name
+        if module == "pytest" and alias.name in ("skip", "skipif", "mark"):
+            names[alias.name].add(local)
+        elif module == "pytest.mark" and alias.name == "skipif":
+            names["skipif"].add(local)
 
 
 def _states_reason(node: ast.Call) -> bool:
@@ -113,22 +101,77 @@ def _states_reason(node: ast.Call) -> bool:
     return any(not isinstance(arg, ast.Starred) for arg in node.args)
 
 
+def _check_calls(node, names, bad, name):
+    """Judge every call in an expression, as the names stand right now."""
+    for call in ast.walk(node):
+        if not isinstance(call, ast.Call):
+            continue
+        kind = _expr_kind(call.func, names)
+        if kind == "skipif":
+            if not any(keyword.arg == "reason" for keyword in call.keywords):
+                bad.append("%s:%d skipif without reason" % (name, call.lineno))
+        elif kind == "skip" and not _states_reason(call):
+            bad.append("%s:%d skip without a reason" % (name, call.lineno))
+
+
+def _body(statements, names, bad, name):
+    for statement in statements:
+        _visit(statement, names, bad, name)
+
+
+def _visit(statement, names, bad, name):
+    if isinstance(statement, (ast.Import, ast.ImportFrom)):
+        _bind_import(statement, names)
+        return
+
+    if isinstance(statement, ast.Assign):
+        _check_calls(statement.value, names, bad, name)
+        for target in statement.targets:
+            _bind_target(target, statement.value, names)
+        return
+
+    if isinstance(statement, ast.AnnAssign):
+        if statement.value is not None:
+            _check_calls(statement.value, names, bad, name)
+            _bind_target(statement.target, statement.value, names)
+        return
+
+    if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for decorator in statement.decorator_list:
+            _check_calls(decorator, names, bad, name)
+        for default in list(statement.args.defaults) + [
+            item for item in statement.args.kw_defaults if item is not None
+        ]:
+            _check_calls(default, names, bad, name)
+        _body(statement.body, _fresh(names), bad, name)
+        return
+
+    if isinstance(statement, ast.ClassDef):
+        for decorator in statement.decorator_list:
+            _check_calls(decorator, names, bad, name)
+        _body(statement.body, _fresh(names), bad, name)
+        return
+
+    # Anything else is read in field order, so the test of an `if` is judged
+    # before its branches and a `try` before its handlers.
+    for _, value in ast.iter_fields(statement):
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, ast.stmt):
+                    _visit(item, names, bad, name)
+                elif isinstance(item, ast.expr):
+                    _check_calls(item, names, bad, name)
+                elif isinstance(item, ast.ExceptHandler):
+                    _body(item.body, names, bad, name)
+        elif isinstance(value, ast.expr):
+            _check_calls(value, names, bad, name)
+
+
 def violations(source: str, name: str = "<test>") -> list:
     """Every silent skip in a source string, as file:line text."""
     tree = ast.parse(source, filename=name)
-    names = _names(tree)
     bad = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        kind = _kind(node, names)
-        if kind is None:
-            continue
-        if kind == "skipif":
-            if not any(keyword.arg == "reason" for keyword in node.keywords):
-                bad.append("%s:%d skipif without reason" % (name, node.lineno))
-        elif not _states_reason(node):
-            bad.append("%s:%d skip without a reason" % (name, node.lineno))
+    _body(tree.body, _fresh(), bad, name)
     return bad
 
 
@@ -193,9 +236,7 @@ def test_the_scanner_catches_an_assigned_alias():
 
 
 def test_the_scanner_follows_an_alias_chain():
-    assert violations(
-        "import pytest\n\np = pytest\ns = p.skip\n\ndef test_x():\n    s()\n"
-    )
+    assert violations("import pytest\n\np = pytest\ns = p.skip\n\ndef test_x():\n    s()\n")
 
 
 def test_the_scanner_follows_a_mark_alias():
@@ -212,6 +253,22 @@ def test_the_scanner_follows_an_unpacked_assignment():
 
 def test_a_reassigned_name_is_taken_at_its_word():
     assert not violations("import pytest\n\nf = pytest.skip\nf = len\n\ndef test_x():\n    f()\n")
+
+
+def test_a_call_before_a_reassignment_is_still_judged():
+    """The binding that was live at the call decides, not the last one."""
+    found = violations(
+        "import pytest\n\ndef test_a():\n    s = pytest.skip\n    s()\n    s = len\n    s()\n"
+    )
+
+    assert len(found) == 1
+    assert "skip without a reason" in found[0]
+
+
+def test_a_local_alias_does_not_leak_into_another_function():
+    assert not violations(
+        "import pytest\n\ndef a():\n    s = pytest.skip\n\ndef test_b():\n    s()\n"
+    )
 
 
 def test_the_scanner_accepts_a_reason():
