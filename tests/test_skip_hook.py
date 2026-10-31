@@ -203,3 +203,20 @@ def test_the_selected_skip_mark_is_the_one_judged(tmp_path):
     assert "1 skipped" in output
     assert "1 error" in output
     assert "test_bad: skipped without a reason" in output
+
+
+def test_a_module_skip_without_a_reason_fails_the_run(tmp_path):
+    result = _run_a_nested_suite(tmp_path, "import pytest\n\npytest.skip(allow_module_level=True)\n")
+
+    assert result.returncode != 0, result.stdout
+    assert "module skipped without a reason" in result.stdout + result.stderr
+
+
+def test_a_module_skip_with_a_reason_stays_skipped(tmp_path):
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\npytest.skip(\"no kernel namespaces on this host\", allow_module_level=True)\n",
+    )
+
+    assert result.returncode in (0, 5), result.stdout + result.stderr
+    assert "1 skipped" in result.stdout
