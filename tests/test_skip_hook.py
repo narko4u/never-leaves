@@ -166,3 +166,26 @@ def test_a_fixture_skip_without_a_reason_fails(tmp_path):
 
     assert result.returncode != 0, result.stdout
     assert "skipped without a reason" in result.stdout + result.stderr
+
+
+def test_a_stateful_condition_is_asked_once_and_a_reasonless_skip_fails(tmp_path):
+    """Evaluating the condition again would answer differently and hide the skip."""
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\ncalls = []\n\n\ndef _bump():\n    calls.append(1)\n    return len(calls) == 1\n\n\n@pytest.mark.skipif(\"_bump()\")\ndef test_bad():\n    pass\n\n\ndef test_asked_once():\n    assert len(calls) == 1, calls\n",
+    )
+
+    assert result.returncode != 0, result.stdout
+    output = result.stdout + result.stderr
+    assert "skipped without a reason" in output
+    assert "1 passed" in output
+
+
+def test_a_stateful_condition_with_a_reason_stays_skipped(tmp_path):
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\ncalls = []\n\n\ndef _bump():\n    calls.append(1)\n    return len(calls) == 1\n\n\n@pytest.mark.skipif(\"_bump()\", reason=\"the first pass only\")\ndef test_good():\n    pass\n\n\ndef test_asked_once():\n    assert len(calls) == 1, calls\n",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 skipped" in result.stdout
