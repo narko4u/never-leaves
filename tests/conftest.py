@@ -38,7 +38,7 @@ def _record_fired_condition():
 
     def evaluate_condition(item, mark, condition):
         result, reason = original(item, mark, condition)
-        if result:
+        if result and getattr(mark, "name", None) == "skipif":
             stash = getattr(item, "stash", None)
             if stash is not None:
                 stash.setdefault(FIRED_SKIPIF, []).append(mark)
@@ -87,14 +87,21 @@ def _raised_reason(call) -> str:
     return str(getattr(excinfo.value, "msg", "") or "").strip()
 
 
+def _the_skip_mark(item):
+    """The skip mark pytest would select: iter_markers yields closest first."""
+    for mark in item.iter_markers(name="skip"):
+        return mark
+    return None
+
+
 def skip_was_reasonless(item, call) -> bool:
     mark = fired_skipif(item)
     if mark is not None:
         return not _written_by_author(mark)
     if _raised_by_a_mark(call):
-        bare = list(item.iter_markers(name="skip"))
-        if bare:
-            return not any(_written_by_author(m) for m in bare)
+        selected = _the_skip_mark(item)
+        if selected is not None:
+            return not _written_by_author(selected)
     return not _raised_reason(call)
 
 

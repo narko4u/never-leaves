@@ -189,3 +189,17 @@ def test_a_stateful_condition_with_a_reason_stays_skipped(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 skipped" in result.stdout
+
+
+def test_the_selected_skip_mark_is_the_one_judged(tmp_path):
+    """A reasoned mark that pytest never selects cannot vouch for the one it does."""
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\n\n@pytest.mark.skip(reason=\"never selected\")\n@pytest.mark.skip\ndef test_bad():\n    pass\n\n\n@pytest.mark.skip\n@pytest.mark.skip(reason=\"the reason that counts\")\ndef test_good():\n    pass\n",
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, result.stdout
+    assert "1 skipped" in output
+    assert "1 error" in output
+    assert "test_bad: skipped without a reason" in output
