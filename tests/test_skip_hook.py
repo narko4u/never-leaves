@@ -268,3 +268,34 @@ def test_a_module_skip_failure_names_the_module_and_the_line(tmp_path):
     output = result.stdout + result.stderr
     assert result.returncode != 0, output
     assert "test_case.py:3: module skipped without a reason" in output
+
+
+def test_a_fixture_skip_without_a_reason_fails_the_run(tmp_path):
+    body = (
+        "import pytest\n\n\n"
+        "@pytest.fixture\n"
+        "def needs_a_namespace():\n"
+        "    pytest.skip()\n\n\n"
+        "def test_uses_it(needs_a_namespace):\n"
+        "    assert True\n"
+    )
+    result = _run_a_nested_suite(tmp_path, body)
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "skipped without a reason" in output
+
+
+def test_a_fixture_skip_with_a_reason_stays_skipped(tmp_path):
+    body = (
+        "import pytest\n\n\n"
+        "@pytest.fixture\n"
+        "def needs_a_namespace():\n"
+        "    pytest.skip(\"the kernel refuses unprivileged namespaces\")\n\n\n"
+        "def test_uses_it(needs_a_namespace):\n"
+        "    assert True\n"
+    )
+    result = _run_a_nested_suite(tmp_path, body)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 skipped" in result.stdout
