@@ -49,6 +49,15 @@ class IsolationReport:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    def not_isolated_reason(self) -> str:
+        """What the warning has to admit, given what could be read."""
+        if self.unreadable:
+            return (
+                "the kernel tables could not be read (%s), so network access "
+                "remains possible" % ", ".join(self.unreadable)
+            )
+        return self.detail
+
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)
 

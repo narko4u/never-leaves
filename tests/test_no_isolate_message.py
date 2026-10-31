@@ -1,48 +1,87 @@
 """When a run goes ahead without a namespace, it says so out loud.
 
-An opt-out is not a quiet mode. The line begins NOT ISOLATED, names what
-the process can still reach, and the report keeps isolated false so nothing
-downstream can mistake the run for a protected one.
+An opt-out is not a quiet mode. The line begins NOT ISOLATED and names what
+the process can still reach. When the kernel tables could not be read the
+line says that too, because an unread table is not a clean one. Every test
+sets the report it is judging, so the host's own network does not decide
+whether the case runs.
 """
 
 import json
-import os
-import subprocess
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).parent.parent
+import pytest
+
+from never_leaves import cli, isolation
 
 
-def _run(args, env):
-    return subprocess.run(
-        [sys.executable, "-m", "never_leaves"] + args,
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        env=env,
+def _report(**overrides):
+    fields = dict(
+        isolated=False,
+        mechanism="test",
+        interfaces=["eth0"],
+        interfaces_up=["eth0"],
+        routes=["default"],
+        inet_sockets=3,
+        default_route=True,
+        kernel_namespace=False,
+        checked_at="2026-10-31T00:00:00+00:00",
+        detail="A non-loopback interface exists: eth0.",
     )
+    fields.update(overrides)
+    return isolation.IsolationReport(**fields)
 
 
-def _env_without_tools(tmp_path):
-    empty = tmp_path / "empty-path"
-    empty.mkdir()
-    env = dict(os.environ)
-    env["PATH"] = str(empty)
-    env.pop("PYTHONPATH", None)
-    return env
+def test_a_read_table_names_what_was_seen():
+    reason = _report().not_isolated_reason()
+
+    assert reason == "A non-loopback interface exists: eth0."
+    assert "could not be read" not in reason
 
 
-def test_no_isolate_prints_the_not_isolated_line(tmp_path):
-    result = _run(["check", "--no-isolate"], _env_without_tools(tmp_path))
+def test_an_unreadable_table_says_network_access_remains_possible():
+    reason = _report(detail="could not read /proc/net/dev", unreadable=["dev"]).not_isolated_reason()
 
-    lines = [line for line in result.stdout.splitlines() if line.startswith("NOT ISOLATED")]
-    assert lines, result.stdout
-    assert "reach" in lines[0] or "interface" in lines[0] or "socket" in lines[0]
+    assert "could not be read" in reason
+    assert "network access remains possible" in reason
 
 
-def test_the_report_still_says_it_was_not_isolated(tmp_path):
-    result = _run(["check", "--no-isolate", "--json"], _env_without_tools(tmp_path))
+def test_check_prints_the_line_for_an_unreadable_report(monkeypatch, capsys):
+    report = _report(
+        detail="could not read /proc/net/dev",
+        unreadable=["dev"],
+        kernel_namespace=True,
+    )
+    monkeypatch.setattr(isolation, "ensure_isolated", lambda *a, **k: report)
 
-    data = json.loads(result.stdout[result.stdout.index("{") :])
-    assert data["isolated"] is False
+    cli.main(["check", "--no-isolate"])
+
+    out = capsys.readouterr().out
+    line = next(l for l in out.splitlines() if l.startswith("NOT ISOLATED"))
+    assert "network access remains possible" in line
+
+
+def test_check_json_keeps_isolated_false(monkeypatch, capsys):
+    monkeypatch.setattr(isolation, "ensure_isolated", lambda *a, **k: _report())
+
+    cli.main(["check", "--no-isolate", "--json"])
+
+    out = capsys.readouterr().out
+    assert json.loads(out[out.index("{") :])["isolated"] is False
+
+
+@pytest.mark.parametrize("command", ["quote", "report"])
+def test_document_commands_say_it_too(monkeypatch, capsys, command):
+    report = _report(detail="could not read /proc/net/dev", unreadable=["dev"])
+    monkeypatch.setattr(isolation, "ensure_isolated", lambda *a, **k: report)
+
+    def stop(*args, **kwargs):
+        raise RuntimeError("stop after the warning")
+
+    monkeypatch.setattr(cli, "_read_note", stop)
+
+    with pytest.raises((RuntimeError, SystemExit)):
+        cli.main([command, "notes.txt", "--no-isolate"])
+
+    out = capsys.readouterr().out
+    assert "NOT ISOLATED" in out
+    assert "network access remains possible" in out

@@ -39,6 +39,10 @@ def _proof_block(report: isolation.IsolationReport) -> str:
     return "\n".join(lines)
 
 
+def _say_not_isolated(report: isolation.IsolationReport) -> None:
+    print("NOT ISOLATED: %s" % report.not_isolated_reason())
+
+
 def _die(message: str, code: int = 2) -> NoReturn:
     print("error: %s" % message, file=sys.stderr)
     raise SystemExit(code)
@@ -130,7 +134,7 @@ def _run_document(args, doc_type):
     report = isolation.ensure_isolated(sys.argv[1:], allow_unverified=args.no_isolate)
     print(_proof_block(report))
     if not report.isolated:
-        print("NOT ISOLATED: %s" % report.detail)
+        _say_not_isolated(report)
         print(WARN)
         print(" WARNING: isolation was not established. This run is NOT private.")
         print(WARN)
@@ -202,7 +206,7 @@ def main(argv=None) -> int:
             # passed. Exit 2 and say which tool is missing.
             _die(str(exc))
         if not report.isolated:
-            print("NOT ISOLATED: %s" % report.detail)
+            _say_not_isolated(report)
         print(_proof_block(report))
         if args.json:
             print(report.to_json())
