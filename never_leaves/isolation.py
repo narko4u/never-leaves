@@ -45,6 +45,7 @@ class IsolationReport:
     checked_at: str
     detail: str
     unreadable: list = field(default_factory=list)
+    proven: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -219,6 +220,7 @@ def inspect() -> IsolationReport:
         kernel_namespace=os.environ.get(MARKER) == "1",
         checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         detail=detail,
+        proven=bool(isolated and os.environ.get(MARKER) == "1"),
     )
 
 
