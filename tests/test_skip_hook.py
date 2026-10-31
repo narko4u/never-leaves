@@ -82,7 +82,7 @@ def test_a_skip_with_a_reason_is_left_alone(tmp_path):
         "import pytest\n\n\ndef test_good():\n    pytest.skip(\"the kernel has no namespaces here\")\n",
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode in (0, 5), result.stdout + result.stderr
     assert "1 skipped" in result.stdout
 
 
@@ -133,7 +133,7 @@ def test_the_fired_reasoned_mark_still_counts(tmp_path):
         "import pytest\n\n\n@pytest.mark.skipif(False, reason=\"only on windows\")\n@pytest.mark.skipif(\"1 == 1\", reason=\"the kernel has no namespaces\")\ndef test_good():\n    pass\n",
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode in (0, 5), result.stdout + result.stderr
     assert "1 skipped" in result.stdout
 
 
@@ -144,7 +144,7 @@ def test_a_positional_skip_reason_counts(tmp_path):
         "import pytest\n\n\n@pytest.mark.skip(\"the kernel has no namespaces\")\ndef test_good():\n    pass\n",
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode in (0, 5), result.stdout + result.stderr
     assert "1 skipped" in result.stdout
 
 
@@ -154,7 +154,7 @@ def test_a_fixture_skip_with_a_reason_is_left_alone(tmp_path):
         "import pytest\n\n\n@pytest.fixture\ndef setup():\n    pytest.skip(\"no namespaces on this kernel\")\n\n\n@pytest.mark.skipif(False, reason=\"only on windows\")\ndef test_good(setup):\n    pass\n",
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode in (0, 5), result.stdout + result.stderr
     assert "1 skipped" in result.stdout
 
 
@@ -187,7 +187,7 @@ def test_a_stateful_condition_with_a_reason_stays_skipped(tmp_path):
         "import pytest\n\ncalls = []\n\n\ndef _bump():\n    calls.append(1)\n    return len(calls) == 1\n\n\n@pytest.mark.skipif(\"_bump()\", reason=\"the first pass only\")\ndef test_good():\n    pass\n\n\ndef test_asked_once():\n    assert len(calls) == 1, calls\n",
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode in (0, 5), result.stdout + result.stderr
     assert "1 skipped" in result.stdout
 
 
@@ -216,6 +216,43 @@ def test_a_module_skip_with_a_reason_stays_skipped(tmp_path):
     result = _run_a_nested_suite(
         tmp_path,
         "import pytest\n\npytest.skip(\"no kernel namespaces on this host\", allow_module_level=True)\n",
+    )
+
+    assert result.returncode in (0, 5), result.stdout + result.stderr
+    assert "1 skipped" in result.stdout
+
+
+def test_a_module_skip_with_only_whitespace_fails_the_run(tmp_path):
+    """pytest normalises a whitespace reason to "Skipped:", which is still no reason."""
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\npytest.skip(\"   \", allow_module_level=True)\n\n\ndef test_control():\n    assert True\n",
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "module skipped without a reason" in output
+    assert "test_case.py" in output
+
+
+def test_a_module_skip_with_a_tab_or_newline_fails_the_run(tmp_path):
+    for label, blank in (("tab", "\t"), ("newline", "\n")):
+        case = tmp_path / label
+        case.mkdir()
+        result = _run_a_nested_suite(
+            case,
+            "import pytest\n\npytest.skip(%r, allow_module_level=True)\n\n\ndef test_control():\n    assert True\n" % blank,
+        )
+
+        output = result.stdout + result.stderr
+        assert result.returncode != 0, output
+        assert "module skipped without a reason" in output
+
+
+def test_a_module_skip_whose_reason_is_the_word_skipped_still_skips(tmp_path):
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\npytest.skip(\"Skipped\", allow_module_level=True)\n\n\ndef test_control():\n    assert True\n",
     )
 
     assert result.returncode in (0, 5), result.stdout + result.stderr

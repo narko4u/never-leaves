@@ -112,10 +112,11 @@ def _collect_skip_reason(report) -> str:
         text = str(longrepr[2])
     else:
         text = str(longrepr or "")
-    if text.startswith("Skipped: "):
-        text = text[len("Skipped: "):]
-    elif text.strip() == "Skipped":
-        text = ""
+    text = text.strip()
+    if text in ("Skipped", "Skipped:"):
+        return ""
+    if text.startswith("Skipped:"):
+        text = text[len("Skipped:"):]
     return text.strip()
 
 
