@@ -130,6 +130,7 @@ def _run_document(args, doc_type):
     report = isolation.ensure_isolated(sys.argv[1:], allow_unverified=args.no_isolate)
     print(_proof_block(report))
     if not report.isolated:
+        print("NOT ISOLATED: %s" % report.detail)
         print(WARN)
         print(" WARNING: isolation was not established. This run is NOT private.")
         print(WARN)
@@ -200,6 +201,8 @@ def main(argv=None) -> int:
             # A check that cannot establish the guarantee is not a check that
             # passed. Exit 2 and say which tool is missing.
             _die(str(exc))
+        if not report.isolated:
+            print("NOT ISOLATED: %s" % report.detail)
         print(_proof_block(report))
         if args.json:
             print(report.to_json())
