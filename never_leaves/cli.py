@@ -160,7 +160,10 @@ def _run_document(args, doc_type):
     )
     out.write_text(rendered, encoding="utf-8")
 
-    final = isolation.inspect()
+    # Re-observe inside whatever namespace this run holds. A run that never
+    # entered one keeps its unverified status: reading the host's tables again
+    # could come back clean and hand the ledger a pass the run never earned.
+    final = isolation.inspect() if report.kernel_namespace else report.outside_a_namespace()
     record = ledger.build_record(doc_type, run, draft_check, final, args.note)
     record["output_path"] = str(out)
     ledger_path = ledger.append(record, Path(args.ledger) if args.ledger else None)
@@ -185,7 +188,8 @@ def _run_document(args, doc_type):
         print("   - %s" % line)
     print()
     print("  isolation re-checked after drafting: %s"
-          % ("still isolated, still no route" if final.isolated else "PROBLEM, see ledger"))
+          % ("still isolated, still no route" if final.isolated
+             else "NOT ISOLATED: %s" % final.not_isolated_reason()))
     return 0
 
 

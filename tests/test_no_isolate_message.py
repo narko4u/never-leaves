@@ -115,3 +115,54 @@ def test_a_clean_reading_without_a_namespace_still_refuses(monkeypatch):
 
     with pytest.raises(isolation.IsolationUnavailable):
         isolation.ensure_isolated([])
+
+
+def _complete_a_document(monkeypatch, tmp_path, out):
+    clean = _report(
+        isolated=True,
+        kernel_namespace=False,
+        interfaces=["lo"],
+        interfaces_up=["lo"],
+        routes=[],
+        inet_sockets=0,
+        detail="Only loopback is present and no route exists.",
+    )
+    monkeypatch.setattr(isolation, "inspect", lambda: clean)
+    monkeypatch.setattr(isolation, "supported", lambda: (False, "unshare is not available"))
+    monkeypatch.setattr(cli, "_read_note", lambda path: "Thirty metres of fencing.")
+    monkeypatch.setattr(cli, "_facts", lambda args: {})
+
+    class Weights:
+        name = "test-model"
+
+    monkeypatch.setattr(cli, "_draft", lambda *a, **k: (
+        Weights(),
+        {"text": "A draft.", "prompt_tokens": 3, "completion_tokens": 4},
+    ))
+    monkeypatch.setattr(cli.model, "fingerprint", lambda ref, full=False: {"sha256": "0" * 64})
+    monkeypatch.setattr(cli.document, "render", lambda *a, **k: "rendered document")
+    monkeypatch.setattr(cli.ledger, "append", lambda record, path: tmp_path / "runs.jsonl")
+    return out
+
+
+@pytest.mark.parametrize("command", ["quote", "report"])
+def test_a_completed_run_keeps_the_unverified_status(monkeypatch, capsys, tmp_path, command):
+    out = _complete_a_document(monkeypatch, tmp_path, tmp_path / "out.md")
+
+    cli.main([command, "notes.txt", "--no-isolate", "--out", str(out), "--json"])
+
+    printed = capsys.readouterr().out
+    data = json.loads(printed[printed.index("{") :])
+    assert data["isolation"]["isolated"] is False
+    assert data["isolation"]["kernel_namespace"] is False
+    assert "network access remains possible" in data["isolation"]["detail"]
+
+
+def test_the_completion_message_says_not_isolated(monkeypatch, capsys, tmp_path):
+    out = _complete_a_document(monkeypatch, tmp_path, tmp_path / "out.md")
+
+    cli.main(["quote", "notes.txt", "--no-isolate", "--out", str(out)])
+
+    printed = capsys.readouterr().out
+    assert printed.count("NOT ISOLATED") >= 2
+    assert "PROBLEM" not in printed
