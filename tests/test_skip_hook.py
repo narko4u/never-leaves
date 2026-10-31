@@ -257,3 +257,14 @@ def test_a_module_skip_whose_reason_is_the_word_skipped_still_skips(tmp_path):
 
     assert result.returncode in (0, 5), result.stdout + result.stderr
     assert "1 skipped" in result.stdout
+
+
+def test_a_module_skip_failure_names_the_module_and_the_line(tmp_path):
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\npytest.skip(allow_module_level=True)\n",
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "test_case.py:3: module skipped without a reason" in output
