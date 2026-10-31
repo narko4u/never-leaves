@@ -198,7 +198,11 @@ def main(argv=None) -> int:
             )
         except isolation.IsolationUnavailable as exc:
             # A check that cannot establish the guarantee is not a check that
-            # passed. Exit 2 and say which tool is missing.
+            # passed. Exit 2 and say which tool is missing. With --json the
+            # report still goes out, so a caller reads proven false rather
+            # than an empty pipe.
+            if args.json:
+                print(isolation.inspect().to_json())
             _die(str(exc))
         print(_proof_block(report))
         if args.json:

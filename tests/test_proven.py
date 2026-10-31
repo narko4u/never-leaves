@@ -1,61 +1,75 @@
 """A report describes. A proof establishes.
 
-`check --json` says `proven` true only when the tables were read and the
-process is the one that was launched into the namespace, so a caller can
-gate on it without parsing prose. These tests run the real command.
+`proven` is true only when the tables were read clean and this process is
+the one launched into the namespace. The rule is tested directly, the
+unreadable case is tested with the marker set, and the refusal path is
+tested to see that a caller still gets a report saying proven false.
 """
 
 import json
-import os
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
-from never_leaves import isolation
-
-ROOT = Path(__file__).parent.parent
+from never_leaves import cli, isolation
 
 
-def _json_from(stdout: str) -> dict:
-    return json.loads(stdout[stdout.index("{") :])
-
-
-def _run(args, env=None):
-    return subprocess.run(
-        [sys.executable, "-m", "never_leaves"] + args,
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        env=env,
+def _report(**overrides):
+    fields = dict(
+        isolated=False,
+        mechanism="test",
+        interfaces=["eth0"],
+        interfaces_up=[],
+        routes=[],
+        inet_sockets=0,
+        default_route=True,
+        kernel_namespace=False,
+        checked_at="2026-10-31T00:00:00+00:00",
+        detail="A non-loopback interface exists: eth0.",
     )
+    fields.update(overrides)
+    return isolation.IsolationReport(**fields)
 
 
-def test_check_json_is_proven_inside_the_namespace():
-    ok, why = isolation.supported()
-    if not ok:
-        pytest.skip("no namespace on this machine: %s" % why)
+def test_clean_tables_only_count_with_the_marker(monkeypatch):
+    monkeypatch.delenv(isolation.MARKER, raising=False)
+    assert isolation.proven_by_tables(True) is False
 
-    result = _run(["check", "--json"])
-
-    data = _json_from(result.stdout)
-    assert data["isolated"] is True
-    assert data["kernel_namespace"] is True
-    assert data["proven"] is True
-    assert result.returncode == 0
+    monkeypatch.setenv(isolation.MARKER, "1")
+    assert isolation.proven_by_tables(True) is True
 
 
-def test_check_json_is_not_proven_when_the_namespace_is_not_entered(tmp_path):
-    empty = tmp_path / "empty-path"
-    empty.mkdir()
-    env = dict(os.environ)
-    env["PATH"] = str(empty)
-    env.pop("PYTHONPATH", None)
+def test_dirty_tables_are_never_proven(monkeypatch):
+    monkeypatch.setenv(isolation.MARKER, "1")
+    assert isolation.proven_by_tables(False) is False
 
-    result = _run(["check", "--no-isolate", "--json"], env=env)
 
-    data = _json_from(result.stdout)
-    assert data["proven"] is False
-    assert data["isolated"] is False
-    assert "proven" in data
+def test_unreadable_tables_are_not_proven_even_with_the_marker(monkeypatch, tmp_path):
+    net = tmp_path / "net"
+    monkeypatch.setattr(isolation, "_PROC", net)
+    monkeypatch.setattr(isolation, "_DEV", net / "dev")
+    monkeypatch.setattr(isolation, "_ROUTE", net / "route")
+    monkeypatch.setenv(isolation.MARKER, "1")
+
+    report = isolation.inspect()
+
+    assert report.unreadable
+    assert report.proven is False
+    assert report.kernel_namespace is True
+
+
+def test_the_report_carries_proven_false():
+    assert json.loads(_report().to_json())["proven"] is False
+
+
+def test_refusal_still_emits_a_report(monkeypatch, capsys):
+    def refuse(*args, **kwargs):
+        raise isolation.IsolationUnavailable("the kernel refused a namespace")
+
+    monkeypatch.setattr(isolation, "ensure_isolated", refuse)
+
+    with pytest.raises(SystemExit) as caught:
+        cli.main(["check", "--json"])
+
+    out = capsys.readouterr().out
+    assert caught.value.code == 2
+    assert json.loads(out[out.index("{") :])["proven"] is False

@@ -24,6 +24,11 @@ from pathlib import Path
 
 MARKER = "NEVER_LEAVES_ISOLATED"
 
+
+def proven_by_tables(isolated: bool) -> bool:
+    """A clean reading only proves something if we are the process it describes."""
+    return bool(isolated and os.environ.get(MARKER) == "1")
+
 _PROC = Path("/proc/net")
 _DEV = _PROC / "dev"
 _ROUTE = _PROC / "route"
@@ -180,6 +185,7 @@ def inspect() -> IsolationReport:
             checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             detail="could not read %s, so isolation is unproven" % ", ".join(missing),
             unreadable=missing,
+            proven=False,
         )
 
     interfaces = _interface_names(texts[str(_DEV)])
@@ -220,7 +226,7 @@ def inspect() -> IsolationReport:
         kernel_namespace=os.environ.get(MARKER) == "1",
         checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         detail=detail,
-        proven=bool(isolated and os.environ.get(MARKER) == "1"),
+        proven=proven_by_tables(isolated),
     )
 
 
