@@ -135,3 +135,34 @@ def test_the_fired_reasoned_mark_still_counts(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 skipped" in result.stdout
+
+
+def test_a_positional_skip_reason_counts(tmp_path):
+    """pytest wraps it as 'unconditional skip (...)'; the words are still the author's."""
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\n\n@pytest.mark.skip(\"the kernel has no namespaces\")\ndef test_good():\n    pass\n",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 skipped" in result.stdout
+
+
+def test_a_fixture_skip_with_a_reason_is_left_alone(tmp_path):
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\n\n@pytest.fixture\ndef setup():\n    pytest.skip(\"no namespaces on this kernel\")\n\n\n@pytest.mark.skipif(False, reason=\"only on windows\")\ndef test_good(setup):\n    pass\n",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 skipped" in result.stdout
+
+
+def test_a_fixture_skip_without_a_reason_fails(tmp_path):
+    result = _run_a_nested_suite(
+        tmp_path,
+        "import pytest\n\n\n@pytest.fixture\ndef setup():\n    pytest.skip()\n\n\n@pytest.mark.skipif(False, reason=\"only on windows\")\ndef test_bad(setup):\n    pass\n",
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "skipped without a reason" in result.stdout + result.stderr

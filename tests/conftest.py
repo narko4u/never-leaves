@@ -4,28 +4,64 @@ The scan in tests/test_skip_policy.py reads source, so it catches the forms a
 person writes. This hook catches the rest: a reason built at run time, a name
 reached through a dict, a branch the environment chose.
 
-It judges authorship rather than text, because pytest writes filler of its own:
-a bare @pytest.mark.skip becomes "unconditional skip", and a skipif given a
-string condition becomes that condition. And it judges the marker that actually
-fired: a reasoned marker that never triggered cannot vouch for a reasonless one
-that did.
+Three things are separated here because they look alike in a report:
+
+* which marker actually fired, computed the way pytest computes it, rather
+  than guessed from the message it printed;
+* whether that marker carried words of the author's, including a positional
+  argument, which pytest wraps as "unconditional skip (...)" in its report;
+* a skip raised by a fixture, which no marker explains and is judged on its
+  own message.
 """
 
 import pytest
 
-SKIP_MARKS = ("skip", "skipif")
+try:  # pytest's own condition evaluation, so our answer matches its answer.
+    from _pytest.skipping import evaluate_condition as _evaluate_condition
+except Exception:  # pragma: no cover - only on a pytest that moved it
+    _evaluate_condition = None
 
 
-def pytest_collection_modifyitems(items):
-    for item in items:
-        marks = [mark for mark in item.iter_markers() if mark.name in SKIP_MARKS]
-        reasons = set()
-        for mark in marks:
-            reason = mark.kwargs.get("reason")
-            if isinstance(reason, str) and reason.strip():
-                reasons.add(reason.strip())
-        item.pb_skip_marks = bool(marks)
-        item.pb_authored_reasons = reasons
+def _conditions(mark):
+    if "condition" in mark.kwargs:
+        return (mark.kwargs["condition"],)
+    return mark.args
+
+
+def _fires(item, mark) -> bool:
+    conditions = _conditions(mark)
+    if not conditions:
+        return True
+    for condition in conditions:
+        if _evaluate_condition is not None:
+            try:
+                result, _ = _evaluate_condition(item, mark, condition)
+            except Exception:
+                continue
+        else:  # pragma: no cover
+            result = bool(condition)
+        if result:
+            return True
+    return False
+
+
+def fired_mark(item):
+    """The marker pytest would act on, in pytest's order: skipif, then skip."""
+    for mark in item.iter_markers(name="skipif"):
+        if _fires(item, mark):
+            return mark
+    for mark in item.iter_markers(name="skip"):
+        return mark
+    return None
+
+
+def mark_written_by_author(mark) -> bool:
+    reason = mark.kwargs.get("reason")
+    if isinstance(reason, str) and reason.strip():
+        return True
+    if mark.name == "skip" and mark.args and str(mark.args[0]).strip():
+        return True
+    return False
 
 
 def _raised_reason(call) -> str:
@@ -45,10 +81,9 @@ def pytest_runtest_makereport(item, call):
         return
 
     raised = _raised_reason(call)
-    if report.when == "setup" and getattr(item, "pb_skip_marks", False):
-        # A marker fired. Its words count only if some marker on this item
-        # carries them; filler written by pytest matches nothing.
-        reasonless = raised not in getattr(item, "pb_authored_reasons", set())
+    if report.when == "setup":
+        mark = fired_mark(item)
+        reasonless = not mark_written_by_author(mark) if mark is not None else not raised
     else:
         reasonless = not raised
 
