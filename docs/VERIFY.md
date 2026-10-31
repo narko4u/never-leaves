@@ -27,6 +27,21 @@ unshare -rn sh -c 'cat /proc/net/dev; echo ---; cat /proc/net/route; echo ---; c
 Expect a single `lo` line with zero counters, an empty route table and an empty
 TCP table. That is the state the tool runs in.
 
+### When a table cannot be read
+
+A report is a proof only when the kernel tables were read. If one of them
+cannot be opened, the tool does not treat it as an empty table: the report says
+`isolated no`, names the tables it could not read, and the summary reads
+`UNPROVEN. Could not read ...`. An empty table and a table you could not open
+are different facts, and only one of them is evidence.
+
+Run the same command again and read the named paths as the same user. A
+`permission denied` means the process runs under a sandbox or a user that
+cannot see network state; `no such file` means `/proc` is not mounted where the
+tool expects it. Fix the environment and re-run. Do not reach for
+`--no-isolate` to quieten it: that option accepts the risk, it does not
+establish the guarantee.
+
 ### Prove a connection attempt fails
 
 ```bash
