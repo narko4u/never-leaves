@@ -128,8 +128,10 @@ def pytest_make_collect_report(collector):
     if not report.skipped:
         return
     if not _collect_skip_reason(report):
+        where = getattr(collector, "nodeid", "module")
+        line = report.longrepr[1] if isinstance(report.longrepr, tuple) and len(report.longrepr) == 3 else 0
         report.outcome = "failed"
-        report.longrepr = "%s: module skipped without a reason" % getattr(collector, "nodeid", "module")
+        report.longrepr = "%s:%s: module skipped without a reason" % (where, line)
 
 
 @pytest.hookimpl(hookwrapper=True)
