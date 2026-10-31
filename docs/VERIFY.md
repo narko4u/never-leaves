@@ -112,6 +112,21 @@ One line per run, with the source digest, the draft digest, the model, the token
 counts and the isolation state. The default location is
 `~/.local/share/never-leaves/runs.jsonl`, mode 0600. There is no other output path.
 
+## How a skip is judged
+
+A skip is not a pass. `tests/conftest.py` fails any skip that carries no words
+of its own, so a suite that quietly stops testing a guarantee cannot go green.
+
+The rule covers two moments. A skip raised by a test or a fixture is judged when
+that test runs. A skip raised while a module is being collected never becomes a
+test, so it is judged at collection instead, and the failure names the module
+that skipped. A reason of spaces, a tab or a newline counts as no reason at all,
+because pytest normalises it to the bare word `Skipped`.
+
+`tests/test_skip_hook.py` proves both by running nested pytest sessions over a
+throwaway directory and reading their exit status and reports, so the proof does
+not depend on reading the hook's source.
+
 ## What this does not prove
 
 Being straight about the edges:
