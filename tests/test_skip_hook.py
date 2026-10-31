@@ -299,3 +299,20 @@ def test_a_fixture_skip_with_a_reason_stays_skipped(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 skipped" in result.stdout
+
+
+def test_a_strict_xfail_that_passes_fails_the_run(tmp_path):
+    body = (
+        "import pytest\n\n\n"
+        "@pytest.mark.xfail(strict=True, reason=\"the kernel refuses unprivileged namespaces\")\n"
+        "def test_expected_to_fail():\n"
+        "    assert True\n"
+    )
+    result = _run_a_nested_suite(tmp_path, body)
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "XPASS(strict)" in output
+    assert "1 failed" in output
+    assert "1 skipped" not in output
+    assert "skipped without a reason" not in output
