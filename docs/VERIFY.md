@@ -114,7 +114,7 @@ counts and the isolation state. The default location is
 
 ## How a skip is judged
 
-A skip is not a pass. `tests/conftest.py` fails any skip that carries no words
+A skip is never a pass. `tests/conftest.py` fails any skip that carries no words
 of its own, so a suite that quietly stops testing a guarantee cannot go green.
 
 The rule covers two moments. A skip raised by a test or a fixture is judged when
