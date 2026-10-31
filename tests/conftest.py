@@ -105,6 +105,33 @@ def skip_was_reasonless(item, call) -> bool:
     return not _raised_reason(call)
 
 
+def _collect_skip_reason(report) -> str:
+    """Collection skips keep their words in a (path, line, 'Skipped: ...') tuple."""
+    longrepr = report.longrepr
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        text = str(longrepr[2])
+    else:
+        text = str(longrepr or "")
+    text = text.strip()
+    if text in ("Skipped", "Skipped:"):
+        return ""
+    if text.startswith("Skipped:"):
+        text = text[len("Skipped:"):]
+    return text.strip()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_make_collect_report(collector):
+    """A module that skips during collection never becomes an item, so judge it here."""
+    outcome = yield
+    report = outcome.get_result()
+    if not report.skipped:
+        return
+    if not _collect_skip_reason(report):
+        report.outcome = "failed"
+        report.longrepr = "%s: module skipped without a reason" % getattr(collector, "nodeid", "module")
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
